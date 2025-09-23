@@ -154,15 +154,17 @@ async def on_message(message: discord.Message):
         if embed.title:
             title = embed.title.lower()
 
-            if "auto summon" in title:
-                print("ℹ️ Auto Summon détecté → aucun cooldown")
-                command = None
-            elif "summon" in title or "card claimed" in title:
+            # Uniquement les trois cas demandés
+            if title.startswith("summon"):   # ex: "Summon"
                 command = "summon"
-            elif "pack opened" in title:
+            elif "pack opened" in title:     # ex: "Premium Pack Opened"
                 command = "open-pack"
-            elif "box opened" in title:
+            elif "box opened" in title:      # ex: "Refreshing Box Opened"
                 command = "open-boxes"
+
+            # Pas de cooldown pour Auto Summon, et on ignore Summon/Card Claimed
+            if "auto summon" in title:
+                command = None
 
         if not command or command not in COOLDOWN_SECONDS:
             return
@@ -183,7 +185,8 @@ async def on_message(message: discord.Message):
                 user = message.guild.get_member(uid)
                 print(f"👤 Utilisateur trouvé via description (ID): {uid}")
             else:
-                pseudo_match = re.search(r"(Claimed By|Summoned By)\s+@?([^\n]+)", embed.description)
+                # Fallback par pseudo si pas de mention
+                pseudo_match = re.search(r"(Claimed By|Summoned By|Opened By)\s+@?([^\n]+)", embed.description)
                 if pseudo_match:
                     pseudo = pseudo_match.group(2).strip()
                     pseudo = pseudo.replace("**", "").replace("*", "")
