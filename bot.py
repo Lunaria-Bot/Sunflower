@@ -172,6 +172,9 @@ async def on_message(message: discord.Message):
                         uid = int(match.group(1))
                         user = message.guild.get_member(uid)
 
+                if not user:
+                    print("⚠️ Aucun utilisateur trouvé dans Summon Claimed")
+
             elif "pack opened" in title:
                 command = "open-pack"
             elif "box opened" in title:
