@@ -19,6 +19,7 @@ COOLDOWN_SECONDS = {
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
+intents.members = True  # nécessaire pour recherche par pseudo
 
 class CooldownBot(discord.Client):
     def __init__(self):
@@ -82,6 +83,41 @@ async def test_redis(interaction: discord.Interaction):
     ttl = await client.redis.ttl(key)
     await interaction.response.send_message(f"Redis TTL for test key: {ttl}s", ephemeral=True)
 
+# Commande admin pour reset cooldowns
+@client.tree.command(name="force-clear", description="Réinitialise les cooldowns d'un joueur (ADMIN uniquement)")
+@app_commands.describe(member="Le membre dont vous voulez réinitialiser les cooldowns",
+                       command="Optionnel: le nom de la commande à réinitialiser (ex: summon, open-boxes)")
+async def force_clear(interaction: discord.Interaction, member: discord.Member, command: str = None):
+    # Vérifie si l'utilisateur est admin
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Vous devez être administrateur pour utiliser cette commande.", ephemeral=True)
+        return
+
+    if not client.redis:
+        await interaction.response.send_message("❌ Redis non connecté.", ephemeral=True)
+        return
+
+    user_id = str(member.id)
+    deleted = 0
+
+    if command:
+        if command not in COOLDOWN_SECONDS:
+            await interaction.response.send_message(f"⚠️ Commande inconnue: `{command}`", ephemeral=True)
+            return
+        key = f"cooldown:{user_id}:{command}"
+        deleted = await client.redis.delete(key)
+    else:
+        # Supprime toutes les clés de cooldown pour ce joueur
+        for cmd in COOLDOWN_SECONDS.keys():
+            key = f"cooldown:{user_id}:{cmd}"
+            result = await client.redis.delete(key)
+            deleted += result
+
+    await interaction.response.send_message(
+        f"✅ Cooldowns réinitialisés pour {member.mention} ({deleted} supprimés).",
+        ephemeral=True
+    )
+
 # ----------------
 # Events
 # ----------------
@@ -126,31 +162,46 @@ async def on_message(message: discord.Message):
         # Try to detect user
         user = None
 
-        # 1. Mentions
+        # 1. Mentions directes
         if message.mentions:
             user = message.mentions[0]
+            print(f"👤 Utilisateur trouvé via mention: {user}")
 
-        # 2. Regex in description
+        # 2. Regex dans description
         if not user and embed.description:
             match = re.search(r"<@!?(\d+)>", embed.description)
             if match:
                 uid = int(match.group(1))
                 user = message.guild.get_member(uid)
+                print(f"👤 Utilisateur trouvé via description (ID): {uid}")
+            else:
+                # fallback pseudo si pas d'ID
+                pseudo_match = re.search(r"(Claimed By|Summoned By)\s+@?([^\n]+)", embed.description)
+                if pseudo_match:
+                    pseudo = pseudo_match.group(2).strip()
+                    pseudo = pseudo.replace("**", "").replace("*", "")
+                    for member in message.guild.members:
+                        if member.display_name == pseudo or member.name == pseudo:
+                            user = member
+                            print(f"👤 Utilisateur trouvé via pseudo: {pseudo}")
+                            break
 
-        # 3. Regex in footer
+        # 3. Regex dans footer
         if not user and embed.footer and embed.footer.text:
             match = re.search(r"<@!?(\d+)>", embed.footer.text)
             if match:
                 uid = int(match.group(1))
                 user = message.guild.get_member(uid)
+                print(f"👤 Utilisateur trouvé via footer: {uid}")
 
-        # 4. Regex in fields
+        # 4. Regex dans fields
         if not user and embed.fields:
             for field in embed.fields:
                 match = re.search(r"<@!?(\d+)>", field.value)
                 if match:
                     uid = int(match.group(1))
                     user = message.guild.get_member(uid)
+                    print(f"👤 Utilisateur trouvé via field: {uid}")
                     break
 
         if not user:
