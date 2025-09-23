@@ -3,7 +3,7 @@ from discord import app_commands
 import asyncio
 import os
 import re
-import redis.asyncio as aioredis  # async Redis client
+import redis.asyncio as aioredis
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL")
@@ -136,9 +136,21 @@ async def on_message(message: discord.Message):
 
             if title == "summon":
                 command = "summon"
+                # Essaye d'abord via interaction
                 if hasattr(message, "interaction") and message.interaction and message.interaction.user:
                     user = message.interaction.user
                     print(f"👤 Utilisateur trouvé via interaction (summon): {user} ({user.id})")
+                # Sinon, parse la description "X used summon"
+                if not user and embed.description:
+                    match = re.search(r"(.+?) used summon", embed.description)
+                    if match:
+                        pseudo = match.group(1).strip()
+                        for member in message.guild.members:
+                            if member.display_name == pseudo or member.name == pseudo:
+                                user = member
+                                print(f"👤 Utilisateur trouvé via description (used summon): {user}")
+                                break
+
             elif "pack opened" in title:
                 command = "open-pack"
             elif "box opened" in title:
@@ -150,15 +162,9 @@ async def on_message(message: discord.Message):
         if not command or command not in COOLDOWN_SECONDS:
             return
 
-        # Si pas trouvé via interaction, fallback
-        if not user:
-            if message.mentions:
-                user = message.mentions[0]
-            elif embed.description:
-                match = re.search(r"<@!?(\d+)>", embed.description)
-                if match:
-                    uid = int(match.group(1))
-                    user = message.guild.get_member(uid)
+        # Fallback mentions
+        if not user and message.mentions:
+            user = message.mentions[0]
 
         if not user:
             print("⚠️ Aucun utilisateur détecté dans cet embed")
