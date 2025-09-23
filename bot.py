@@ -93,14 +93,9 @@ async def on_message(message: discord.Message):
             )
             return
 
+        # Start cooldown silently
         cd_time = COOLDOWN_SECONDS[cmd]
         await client.redis.setex(key, cd_time, "1")
-
-        await message.channel.send(
-            f"⚡ {user.mention}, cooldown started for `/{cmd}`! "
-            f"I’ll remind you in {cd_time // 60 if cd_time >= 60 else cd_time} "
-            f"{'minutes' if cd_time >= 60 else 'seconds'}."
-        )
 
         async def cooldown_task():
             await asyncio.sleep(cd_time)
