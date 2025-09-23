@@ -71,6 +71,50 @@ async def cooldowns_cmd(interaction: discord.Interaction):
         await interaction.response.send_message("⏳ Active cooldowns:\n" + "\n".join(lines), ephemeral=True)
 
 # ----------------
+# Shared cooldown handler
+# ----------------
+async def handle_cooldown(cmd: str, user: discord.User, message: discord.Message):
+    if cmd not in COOLDOWN_SECONDS:
+        return
+
+    user_id = str(user.id)
+    now = asyncio.get_event_loop().time()
+
+    if user_id not in client.cooldowns:
+        client.cooldowns[user_id] = {}
+
+    if cmd in client.cooldowns[user_id] and client.cooldowns[user_id][cmd] > now:
+        await message.channel.send(
+            f"⏳ {user.mention}, you are still on cooldown for `/{cmd}`!"
+        )
+        return
+
+    # Start cooldown
+    cd_time = COOLDOWN_SECONDS[cmd]
+    client.cooldowns[user_id][cmd] = now + cd_time
+    client.save_cooldowns()
+
+    await message.channel.send(
+        f"⚡ {user.mention}, cooldown started for `/{cmd}`! "
+        f"I’ll remind you in {cd_time // 60 if cd_time >= 60 else cd_time} "
+        f"{'minutes' if cd_time >= 60 else 'seconds'}."
+    )
+
+    async def cooldown_task():
+        await asyncio.sleep(cd_time)
+        if user_id in client.cooldowns and cmd in client.cooldowns[user_id]:
+            del client.cooldowns[user_id][cmd]
+            if not client.cooldowns[user_id]:
+                del client.cooldowns[user_id]
+            client.save_cooldowns()
+
+        await message.channel.send(
+            f"✅ {user.mention}, cooldown for `/{cmd}` is over!"
+        )
+
+    asyncio.create_task(cooldown_task())
+
+# ----------------
 # Events
 # ----------------
 @client.event
@@ -86,8 +130,19 @@ async def on_message(message: discord.Message):
     if message.guild and message.guild.id != GUILD_ID:
         return  # only work in your server
 
-    # Only listen to Mazoku bot
-    if message.author.bot and message.author.id == MAZOKU_BOT_ID and message.embeds:
+    if not (message.author.bot and message.author.id == MAZOKU_BOT_ID):
+        return
+
+    # --- Try interaction-based detection first ---
+    if message.interaction:
+        cmd = message.interaction.name
+        user = message.interaction.user
+        print(f"🎯 Interaction detected: /{cmd} by {user} ({user.id})")
+        await handle_cooldown(cmd, user, message)
+        return
+
+    # --- Fallback: embed-based detection ---
+    if message.embeds:
         embed = message.embeds[0]
         command = None
 
@@ -96,49 +151,14 @@ async def on_message(message: discord.Message):
         elif embed.title and "Card" in embed.title:
             command = "open-boxes"
 
-        if not command or command not in COOLDOWN_SECONDS:
+        if not command:
             return
 
         user = message.mentions[0] if message.mentions else None
         if not user:
             return
 
-        user_id = str(user.id)
-        now = asyncio.get_event_loop().time()
-
-        if user_id not in client.cooldowns:
-            client.cooldowns[user_id] = {}
-
-        if command in client.cooldowns[user_id] and client.cooldowns[user_id][command] > now:
-            await message.channel.send(
-                f"⏳ {user.mention}, you are still on cooldown for `/{command}`!"
-            )
-            return
-
-        # Start cooldown
-        cd_time = COOLDOWN_SECONDS[command]
-        client.cooldowns[user_id][command] = now + cd_time
-        client.save_cooldowns()
-
-        await message.channel.send(
-            f"⚡ {user.mention}, cooldown started for `/{command}`! "
-            f"I’ll remind you in {cd_time // 60 if cd_time >= 60 else cd_time} "
-            f"{'minutes' if cd_time >= 60 else 'seconds'}."
-        )
-
-        async def cooldown_task():
-            await asyncio.sleep(cd_time)
-            # Expired → remove
-            if user_id in client.cooldowns and command in client.cooldowns[user_id]:
-                del client.cooldowns[user_id][command]
-                if not client.cooldowns[user_id]:
-                    del client.cooldowns[user_id]
-                client.save_cooldowns()
-
-            await message.channel.send(
-                f"✅ {user.mention}, cooldown for `/{command}` is over!"
-            )
-
-        asyncio.create_task(cooldown_task())
+        print(f"📦 Embed detected: /{command} by {user} ({user.id})")
+        await handle_cooldown(command, user, message)
 
 client.run(TOKEN)
