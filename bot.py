@@ -2,17 +2,19 @@ import discord
 from discord import app_commands
 import asyncio
 import os
-import redis.asyncio as aioredis  # async Redis client
+import json
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-REDIS_URL = os.getenv("REDIS_URL")
 MAZOKU_BOT_ID = 1242388858897956906
 GUILD_ID = 1196690004852883507
 
+# Cooldown times per command
 COOLDOWN_SECONDS = {
     "summon": 1800,   # 30 min
     "open-boxes": 60  # 1 min
 }
+
+PERSIST_FILE = "cooldowns.json"
 
 intents = discord.Intents.default()
 intents.messages = True
@@ -22,33 +24,45 @@ class CooldownBot(discord.Client):
     def __init__(self):
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
-        self.redis = None
+        self.cooldowns = {}
 
     async def setup_hook(self):
-        print("🔌 Connecting to Redis...")
-        self.redis = await aioredis.from_url(REDIS_URL, decode_responses=True)
-        try:
-            pong = await self.redis.ping()
-            print(f"✅ Redis connected: PING = {pong}")
-        except Exception as e:
-            print(f"❌ Redis connection failed: {e}")
+        # Sync slash commands to your guild only
         guild = discord.Object(id=GUILD_ID)
         self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild)
 
+    def load_cooldowns(self):
+        if os.path.exists(PERSIST_FILE):
+            try:
+                with open(PERSIST_FILE, "r") as f:
+                    self.cooldowns = json.load(f)
+            except:
+                self.cooldowns = {}
+        else:
+            self.cooldowns = {}
+
+    def save_cooldowns(self):
+        with open(PERSIST_FILE, "w") as f:
+            json.dump(self.cooldowns, f)
+
 client = CooldownBot()
 
+# ----------------
+# Slash Commands
+# ----------------
 @client.tree.command(name="cooldowns", description="Check your active cooldowns")
 async def cooldowns_cmd(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
-    lines = []
+    if user_id not in client.cooldowns or not client.cooldowns[user_id]:
+        await interaction.response.send_message("✅ You have no active cooldowns!", ephemeral=True)
+        return
 
-    for cmd in COOLDOWN_SECONDS.keys():
-        key = f"cooldown:{user_id}:{cmd}"
-        ttl = await client.redis.ttl(key)
-        print(f"⏱️ Checked {key} → TTL={ttl}")
-        if ttl > 0:
-            mins, secs = divmod(ttl, 60)
+    lines = []
+    for cmd, ts in client.cooldowns[user_id].items():
+        remaining = int(ts - asyncio.get_event_loop().time())
+        if remaining > 0:
+            mins, secs = divmod(remaining, 60)
             lines.append(f"`/{cmd}` → {mins}m {secs}s left")
 
     if not lines:
@@ -56,58 +70,72 @@ async def cooldowns_cmd(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("⏳ Active cooldowns:\n" + "\n".join(lines), ephemeral=True)
 
+# ----------------
+# Events
+# ----------------
 @client.event
 async def on_ready():
+    client.load_cooldowns()
     print(f"✅ Logged in as {client.user} ({client.user.id})")
 
 @client.event
 async def on_message(message: discord.Message):
     if message.author.id == client.user.id:
         return
+
     if message.guild and message.guild.id != GUILD_ID:
-        return
+        return  # only work in your server
 
+    # Only listen to Mazoku bot
     if message.author.bot and message.author.id == MAZOKU_BOT_ID:
-        cmd = None
-        user = None
-
         if message.interaction_metadata:
+            # Debug: inspect the structure
             print("🔎 interaction_metadata:", message.interaction_metadata)
+            print("🔎 dir(interaction_metadata):", dir(message.interaction_metadata))
+            print("🔎 dict(interaction_metadata):", message.interaction_metadata.__dict__)
+
             cmd = getattr(message.interaction_metadata, "command_name", None)
             user = getattr(message.interaction_metadata, "user", None)
-        elif message.interaction:
-            print("⚠️ Using deprecated interaction:", message.interaction)
-            cmd = message.interaction.name
-            user = message.interaction.user
 
-        print(f"📥 Detected Mazoku cmd={cmd}, user={user}")
+            print(f"📥 Detected Mazoku cmd={cmd}, user={user}")
 
-        if not cmd or cmd not in COOLDOWN_SECONDS or not user:
-            return
+            if not cmd or not user:
+                return
 
-        user_id = str(user.id)
-        key = f"cooldown:{user_id}:{cmd}"
-        ttl = await client.redis.ttl(key)
-        print(f"📊 Redis check {key} → TTL={ttl}")
+            cmd = cmd.lower()
+            if cmd not in COOLDOWN_SECONDS:
+                return
 
-        if ttl > 0:
-            await message.channel.send(
-                f"⏳ {user.mention}, you are still on cooldown for `/{cmd}` ({ttl}s left)!"
-            )
-            return
+            user_id = str(user.id)
+            now = asyncio.get_event_loop().time()
 
-        # Start cooldown
-        cd_time = COOLDOWN_SECONDS[cmd]
-        await client.redis.setex(key, cd_time, "1")
-        print(f"✅ Set cooldown {key} for {cd_time}s")
+            if user_id not in client.cooldowns:
+                client.cooldowns[user_id] = {}
 
-        async def cooldown_task():
-            await asyncio.sleep(cd_time)
-            await message.channel.send(
-                f"✅ {user.mention}, cooldown for `/{cmd}` is over!"
-            )
-            print(f"🗑️ Expired {key}")
+            if cmd in client.cooldowns[user_id] and client.cooldowns[user_id][cmd] > now:
+                await message.channel.send(
+                    f"⏳ {user.mention}, you are still on cooldown for `/{cmd}`!"
+                )
+                return
 
-        asyncio.create_task(cooldown_task())
+            # Start cooldown
+            cd_time = COOLDOWN_SECONDS[cmd]
+            client.cooldowns[user_id][cmd] = now + cd_time
+            client.save_cooldowns()
+
+            async def cooldown_task():
+                await asyncio.sleep(cd_time)
+                # Expired → remove
+                if user_id in client.cooldowns and cmd in client.cooldowns[user_id]:
+                    del client.cooldowns[user_id][cmd]
+                    if not client.cooldowns[user_id]:
+                        del client.cooldowns[user_id]
+                    client.save_cooldowns()
+
+                await message.channel.send(
+                    f"✅ {user.mention}, cooldown for `/{cmd}` is over!"
+                )
+
+            asyncio.create_task(cooldown_task())
 
 client.run(TOKEN)
