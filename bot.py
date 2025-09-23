@@ -136,11 +136,10 @@ async def on_message(message: discord.Message):
 
             if title == "summon":
                 command = "summon"
-                # Essaye d'abord via interaction
+                # Essaye via interaction
                 if hasattr(message, "interaction") and message.interaction and message.interaction.user:
                     user = message.interaction.user
-                    print(f"👤 Utilisateur trouvé via interaction (summon): {user} ({user.id})")
-                # Sinon, parse la description "X used summon"
+                # Sinon, parse "X used summon"
                 if not user and embed.description:
                     match = re.search(r"(.+?) used summon", embed.description)
                     if match:
@@ -148,8 +147,16 @@ async def on_message(message: discord.Message):
                         for member in message.guild.members:
                             if member.display_name == pseudo or member.name == pseudo:
                                 user = member
-                                print(f"👤 Utilisateur trouvé via description (used summon): {user}")
                                 break
+
+            elif "summon claimed" in title:
+                command = "summon"
+                # Cherche "Claimed By"
+                if embed.description:
+                    match = re.search(r"Claimed By\s+<@!?(\d+)>", embed.description)
+                    if match:
+                        uid = int(match.group(1))
+                        user = message.guild.get_member(uid)
 
             elif "pack opened" in title:
                 command = "open-pack"
@@ -184,7 +191,7 @@ async def on_message(message: discord.Message):
         await client.redis.setex(key, cd_time, "1")
         print(f"✅ Cooldown posé: {key} TTL={cd_time}")
 
-        # Envoi d'une confirmation dans le salon choisi
+        # Log début
         log_channel = message.guild.get_channel(LOG_CHANNEL_ID)
         if log_channel:
             await log_channel.send(
@@ -194,9 +201,15 @@ async def on_message(message: discord.Message):
         async def cooldown_task():
             await asyncio.sleep(cd_time)
             try:
+                # Message public
                 await message.channel.send(
                     f"✅ {user.mention}, cooldown for `/{command}` is over!"
                 )
+                # Log fin
+                if log_channel:
+                    await log_channel.send(
+                        f"🕒 Fin du cooldown pour {user.mention} → `/{command}`"
+                    )
             except Exception as e:
                 print(f"⚠️ Notification fin de cooldown échouée: {e}")
 
