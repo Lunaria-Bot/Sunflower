@@ -5,7 +5,7 @@ import os
 import redis.asyncio as aioredis  # async Redis client
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-REDIS_URL = os.getenv("REDIS_URL")
+REDIS_URL = os.getenv("REDIS_URL")  # Railway fournit cette variable
 MAZOKU_BOT_ID = 1242388858897956906
 GUILD_ID = 1196690004852883507
 
@@ -27,12 +27,16 @@ class CooldownBot(discord.Client):
 
     async def setup_hook(self):
         print("🔌 Connecting to Redis...")
-        self.redis = await aioredis.from_url(REDIS_URL, decode_responses=True)
         try:
+            self.redis = await aioredis.from_url(
+                REDIS_URL,
+                decode_responses=True
+            )
             pong = await self.redis.ping()
             print(f"✅ Redis connected: PING={pong}")
         except Exception as e:
             print(f"❌ Redis connection failed: {e}")
+            self.redis = None
 
         # Sync slash commands to your guild
         guild = discord.Object(id=GUILD_ID)
@@ -42,10 +46,14 @@ class CooldownBot(discord.Client):
 client = CooldownBot()
 
 # ----------------
-# Slash Command
+# Slash Commands
 # ----------------
 @client.tree.command(name="cooldowns", description="Check your active cooldowns")
 async def cooldowns_cmd(interaction: discord.Interaction):
+    if not client.redis:
+        await interaction.response.send_message("❌ Redis not connected!", ephemeral=True)
+        return
+
     user_id = str(interaction.user.id)
     lines = []
 
@@ -61,6 +69,18 @@ async def cooldowns_cmd(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("⏳ Active cooldowns:\n" + "\n".join(lines), ephemeral=True)
 
+# Commande de test Redis
+@client.tree.command(name="test-redis", description="Test Redis setex and ttl")
+async def test_redis(interaction: discord.Interaction):
+    if not client.redis:
+        await interaction.response.send_message("❌ Redis not connected!", ephemeral=True)
+        return
+
+    key = f"test:{interaction.user.id}"
+    await client.redis.setex(key, 10, "test")
+    ttl = await client.redis.ttl(key)
+    await interaction.response.send_message(f"Redis TTL for test key: {ttl}s", ephemeral=True)
+
 # ----------------
 # Events
 # ----------------
@@ -70,6 +90,9 @@ async def on_ready():
 
 @client.event
 async def on_message(message: discord.Message):
+    if not client.redis:
+        return
+
     if message.author.id == client.user.id:
         return
     if message.guild and message.guild.id != GUILD_ID:
@@ -107,6 +130,7 @@ async def on_message(message: discord.Message):
 
         # Start cooldown silently
         cd_time = COOLDOWN_SECONDS[command]
+        print(f"➡️ Setting cooldown key {key} for {cd_time}s")
         await client.redis.setex(key, cd_time, "1")
 
         async def cooldown_task():
