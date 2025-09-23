@@ -109,7 +109,7 @@ async def handle_cooldown(cmd: str, user: discord.User, message: discord.Message
             client.save_cooldowns()
 
         await message.channel.send(
-            f"✅ {user.mention}, cooldown for `/{cmd}` is over!"
+            f"✅ {user.mention}, Hey just to remind you that `/{cmd}` is over!"
         )
 
     asyncio.create_task(cooldown_task())
