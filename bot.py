@@ -2,6 +2,7 @@ import discord
 from discord import app_commands
 import asyncio
 import os
+import re
 import redis.asyncio as aioredis  # async Redis client
 
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -98,20 +99,21 @@ async def on_message(message: discord.Message):
     if message.guild and message.guild.id != GUILD_ID:
         return  # only work in your server
 
-    # Debug logs
-    print(f"📩 Message reçu de {message.author} ({message.author.id})")
-    if message.embeds:
-        print(f"➡️ Embed détecté: {message.embeds[0].title}")
-    else:
-        print("⚠️ Pas d'embed dans ce message")
-        return
-
     # Only listen to Mazoku bot
-    if message.author.bot and message.author.id == MAZOKU_BOT_ID:
+    if message.author.bot and message.author.id == MAZOKU_BOT_ID and message.embeds:
         embed = message.embeds[0]
-        command = None
 
-        # Detect command based on embed title
+        # Debug full embed
+        print("=== DEBUG EMBED ===")
+        print(f"Title: {embed.title}")
+        print(f"Description: {embed.description}")
+        print(f"Footer: {embed.footer.text if embed.footer else None}")
+        for i, field in enumerate(embed.fields):
+            print(f"Field {i}: name={field.name}, value={field.value}")
+        print("===================")
+
+        # Detect command
+        command = None
         if embed.title and "Summon" in embed.title:
             command = "summon"
         elif embed.title and "Card" in embed.title:
@@ -121,20 +123,38 @@ async def on_message(message: discord.Message):
             print("⚠️ Aucun cooldown associé à cet embed")
             return
 
-        # Detect mentioned user
-        user = message.mentions[0] if message.mentions else None
+        # Try to detect user
+        user = None
 
-        # Si pas de mention, tenter de récupérer depuis description
+        # 1. Mentions
+        if message.mentions:
+            user = message.mentions[0]
+
+        # 2. Regex in description
         if not user and embed.description:
-            # Exemple: "Player <@123456789> did something"
-            import re
             match = re.search(r"<@!?(\d+)>", embed.description)
             if match:
-                user_id = int(match.group(1))
-                user = message.guild.get_member(user_id)
+                uid = int(match.group(1))
+                user = message.guild.get_member(uid)
+
+        # 3. Regex in footer
+        if not user and embed.footer and embed.footer.text:
+            match = re.search(r"<@!?(\d+)>", embed.footer.text)
+            if match:
+                uid = int(match.group(1))
+                user = message.guild.get_member(uid)
+
+        # 4. Regex in fields
+        if not user and embed.fields:
+            for field in embed.fields:
+                match = re.search(r"<@!?(\d+)>", field.value)
+                if match:
+                    uid = int(match.group(1))
+                    user = message.guild.get_member(uid)
+                    break
 
         if not user:
-            print("⚠️ Aucun utilisateur détecté dans ce message")
+            print("⚠️ Aucun utilisateur détecté dans cet embed")
             return
 
         user_id = str(user.id)
@@ -148,7 +168,7 @@ async def on_message(message: discord.Message):
             )
             return
 
-        # Start cooldown silently
+        # Start cooldown
         cd_time = COOLDOWN_SECONDS[command]
         await client.redis.setex(key, cd_time, "1")
         ttl_after = await client.redis.ttl(key)
