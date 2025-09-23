@@ -58,19 +58,65 @@ async def cooldowns_cmd(interaction: discord.Interaction):
         return
 
     user_id = str(interaction.user.id)
-    lines = []
 
-    for cmd in COOLDOWN_SECONDS.keys():
-        key = f"cooldown:{user_id}:{cmd}"
-        ttl = await client.redis.ttl(key)
-        if ttl > 0:
-            mins, secs = divmod(ttl, 60)
-            lines.append(f"`/{cmd}` → {mins}m {secs}s left")
+    # Embed aux couleurs "tournesol"
+    embed = discord.Embed(
+        title="🌻 MoonQuill te rappelle :",
+        description="Voici tes temps restants avant de pouvoir rejouer !",
+        color=discord.Color.from_rgb(255, 204, 0)  # jaune tournesol
+    )
+    embed.set_author(
+        name=interaction.user.display_name,
+        icon_url=interaction.user.display_avatar.url
+    )
 
-    if not lines:
-        await interaction.response.send_message("✅ You have no active cooldowns!", ephemeral=True)
-    else:
-        await interaction.response.send_message("⏳ Active cooldowns:\n" + "\n".join(lines), ephemeral=True)
+    found = False
+
+    # Summon
+    key = f"cooldown:{user_id}:summon"
+    ttl = await client.redis.ttl(key)
+    if ttl > 0:
+        mins, secs = divmod(ttl, 60)
+        embed.add_field(
+            name="✨ Summon",
+            value=f"⏱️ {mins}m {secs}s restants",
+            inline=False
+        )
+        found = True
+
+    # Premium Packs
+    key = f"cooldown:{user_id}:open-pack"
+    ttl = await client.redis.ttl(key)
+    if ttl > 0:
+        mins, secs = divmod(ttl, 60)
+        embed.add_field(
+            name="🎁 Premium Packs",
+            value=f"⏱️ {mins}m {secs}s restants",
+            inline=False
+        )
+        found = True
+
+    # Box Opened
+    key = f"cooldown:{user_id}:open-boxes"
+    ttl = await client.redis.ttl(key)
+    if ttl > 0:
+        mins, secs = divmod(ttl, 60)
+        embed.add_field(
+            name="📦 Box",
+            value=f"⏱️ {mins}m {secs}s restants",
+            inline=False
+        )
+        found = True
+
+    if not found:
+        embed.description = "✅ Aucun cooldown actif, profite du soleil ☀️"
+        embed.color = discord.Color.green()
+
+    # Footer inspirant
+    embed.set_footer(text="Comme un tournesol, tourne-toi vers la lumière 🌞")
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 @client.tree.command(name="force-clear", description="Réinitialise les cooldowns d'un joueur (ADMIN uniquement)")
 @app_commands.describe(member="Le membre dont vous voulez réinitialiser les cooldowns",
@@ -113,9 +159,6 @@ async def on_ready():
 
 @client.event
 async def on_message(message: discord.Message):
-    # Debug minimal pour savoir si on reçoit des messages
-    # print(f"[DEBUG] Message reçu de {message.author} (ID={message.author.id})")
-
     if not client.redis:
         return
     if message.author.id == client.user.id:
@@ -123,7 +166,6 @@ async def on_message(message: discord.Message):
     if message.guild and message.guild.id != GUILD_ID:
         return
 
-    # Only listen to Mazoku bot
     if message.author.bot and message.author.id == MAZOKU_BOT_ID:
         user = None
         cmd = None
@@ -140,16 +182,12 @@ async def on_message(message: discord.Message):
             title = embed.title.lower() if embed.title else ""
             desc = embed.description or ""
 
-            # Summon Claimed -> associer au /summon
             if "summon claimed" in title:
                 cmd = "summon"
-
-                # Cherche "Claimed By" dans description
                 match = re.search(r"Claimed By\s+<@!?(\d+)>", desc)
                 if match:
                     user = message.guild.get_member(int(match.group(1)))
 
-                # Cherche aussi dans les fields
                 if not user and embed.fields:
                     for field in embed.fields:
                         match = re.search(r"Claimed By\s+<@!?(\d+)>", field.value)
@@ -157,15 +195,13 @@ async def on_message(message: discord.Message):
                             user = message.guild.get_member(int(match.group(1)))
                             break
 
-                # Cherche dans le footer
                 if not user and embed.footer and embed.footer.text:
                     match = re.search(r"Claimed By\s+<@!?(\d+)>", embed.footer.text)
                     if match:
                         user = message.guild.get_member(int(match.group(1)))
 
                 if not user:
-                    # Dernier recours: si le format est "Claimed by **Pseudo**" sans mention,
-                    # on tente de matcher le pseudo et de le retrouver dans la guild.
+                    # Dernier recours: "Claimed by Pseudo" sans mention
                     match = re.search(r"Claimed by\s+\*{0,2}([^*\n]+)\*{0,2}", desc, flags=re.IGNORECASE)
                     if not match and embed.fields:
                         for field in embed.fields:
@@ -218,10 +254,19 @@ async def on_message(message: discord.Message):
             async def cooldown_task():
                 await asyncio.sleep(cd_time)
                 try:
-                    # Message public
-                    await message.channel.send(
-                        f"✅ {user.mention}, cooldown for `/{cmd}` is over!"
+                    # Message public avec thème Sunflower
+                    end_embed = discord.Embed(
+                        title="🌞 Cooldown terminé !",
+                        description=(
+                            f"{user.mention}, ton **/{cmd}** est de nouveau disponible.\n\n"
+                            "Comme un tournesol, profite de cette nouvelle lumière 🌻"
+                        ),
+                        color=discord.Color.from_rgb(255, 204, 0)
                     )
+                    end_embed.set_footer(text="MoonQuill veille sur toi ✨")
+
+                    await message.channel.send(embed=end_embed)
+
                     # Log fin
                     if log_channel:
                         await log_channel.send(
