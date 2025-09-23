@@ -113,6 +113,9 @@ async def on_ready():
 
 @client.event
 async def on_message(message: discord.Message):
+    # Debug minimal pour savoir si on reçoit des messages
+    # print(f"[DEBUG] Message reçu de {message.author} (ID={message.author.id})")
+
     if not client.redis:
         return
     if message.author.id == client.user.id:
@@ -120,12 +123,13 @@ async def on_message(message: discord.Message):
     if message.guild and message.guild.id != GUILD_ID:
         return
 
+    # Only listen to Mazoku bot
     if message.author.bot and message.author.id == MAZOKU_BOT_ID:
         user = None
         cmd = None
 
         # --- Cas 1 : via interaction (slash command directe) ---
-        if message.interaction:
+        if getattr(message, "interaction", None):
             cmd = message.interaction.name
             user = message.interaction.user
             print(f"🎯 Detected /{cmd} by {user} ({user.id})")
@@ -134,14 +138,17 @@ async def on_message(message: discord.Message):
         elif message.embeds:
             embed = message.embeds[0]
             title = embed.title.lower() if embed.title else ""
+            desc = embed.description or ""
 
+            # Summon Claimed -> associer au /summon
             if "summon claimed" in title:
                 cmd = "summon"
+
                 # Cherche "Claimed By" dans description
-                if embed.description:
-                    match = re.search(r"Claimed By\s+<@!?(\d+)>", embed.description)
-                    if match:
-                        user = message.guild.get_member(int(match.group(1)))
+                match = re.search(r"Claimed By\s+<@!?(\d+)>", desc)
+                if match:
+                    user = message.guild.get_member(int(match.group(1)))
+
                 # Cherche aussi dans les fields
                 if not user and embed.fields:
                     for field in embed.fields:
@@ -149,6 +156,7 @@ async def on_message(message: discord.Message):
                         if match:
                             user = message.guild.get_member(int(match.group(1)))
                             break
+
                 # Cherche dans le footer
                 if not user and embed.footer and embed.footer.text:
                     match = re.search(r"Claimed By\s+<@!?(\d+)>", embed.footer.text)
@@ -156,7 +164,26 @@ async def on_message(message: discord.Message):
                         user = message.guild.get_member(int(match.group(1)))
 
                 if not user:
-                    print("⚠️ Aucun utilisateur trouvé dans Summon Claimed")
+                    # Dernier recours: si le format est "Claimed by **Pseudo**" sans mention,
+                    # on tente de matcher le pseudo et de le retrouver dans la guild.
+                    match = re.search(r"Claimed by\s+\*{0,2}([^*\n]+)\*{0,2}", desc, flags=re.IGNORECASE)
+                    if not match and embed.fields:
+                        for field in embed.fields:
+                            match = re.search(r"Claimed by\s+\*{0,2}([^*\n]+)\*{0,2}", field.value, flags=re.IGNORECASE)
+                            if match:
+                                break
+                    if not match and embed.footer and embed.footer.text:
+                        match = re.search(r"Claimed by\s+\*{0,2}([^*\n]+)\*{0,2}", embed.footer.text, flags=re.IGNORECASE)
+
+                    if match:
+                        pseudo = match.group(1).strip()
+                        for member in message.guild.members:
+                            if member.display_name == pseudo or member.name == pseudo:
+                                user = member
+                                break
+
+                    if not user:
+                        print("⚠️ Aucun utilisateur trouvé dans Summon Claimed")
 
             elif "pack opened" in title:
                 cmd = "open-pack"
@@ -204,3 +231,10 @@ async def on_message(message: discord.Message):
                     print(f"⚠️ Notification fin de cooldown échouée: {e}")
 
             asyncio.create_task(cooldown_task())
+
+# ----------------
+# Entrée du programme
+# ----------------
+if not TOKEN:
+    raise RuntimeError("DISCORD_TOKEN manquant dans les variables d'environnement.")
+client.run(TOKEN)
