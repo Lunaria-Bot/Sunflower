@@ -13,8 +13,8 @@ LOG_CHANNEL_ID = 1420095365494866001  # Channel for logs
 
 # Cooldown times per command (seconds)
 COOLDOWN_SECONDS = {
-    "summon": 10,      # 30 min
-    "open-boxes": 10,    # ⚡ TEST: 10s instead of 1 min
+    "summon": 1800,      # 30 min
+    "open-boxes": 60,    #  1 min
     "open-pack": 60      # 1 min
 }
 
