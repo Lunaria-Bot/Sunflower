@@ -12,8 +12,9 @@ GUILD_ID = 1196690004852883507
 
 # Cooldown times per command (seconds)
 COOLDOWN_SECONDS = {
-    "summon": 1800,   # 30 min
-    "open-boxes": 60  # 1 min
+    "summon": 1800,      # 30 min
+    "open-boxes": 60,    # 1 min
+    "open-pack": 60      # 1 min
 }
 
 intents = discord.Intents.default()
@@ -86,7 +87,7 @@ async def test_redis(interaction: discord.Interaction):
 # Commande admin pour reset cooldowns
 @client.tree.command(name="force-clear", description="Réinitialise les cooldowns d'un joueur (ADMIN uniquement)")
 @app_commands.describe(member="Le membre dont vous voulez réinitialiser les cooldowns",
-                       command="Optionnel: le nom de la commande à réinitialiser (ex: summon, open-boxes)")
+                       command="Optionnel: le nom de la commande à réinitialiser (ex: summon, open-boxes, open-pack)")
 async def force_clear(interaction: discord.Interaction, member: discord.Member, command: str = None):
     # Vérifie si l'utilisateur est admin
     if not interaction.user.guild_permissions.administrator:
@@ -150,13 +151,20 @@ async def on_message(message: discord.Message):
 
         # Detect command
         command = None
-        if embed.title and "Summon" in embed.title:
-            command = "summon"
-        elif embed.title and "Card" in embed.title:
-            command = "open-boxes"
+        if embed.title:
+            title = embed.title.lower()
+
+            if "auto summon" in title:
+                print("ℹ️ Auto Summon détecté → aucun cooldown")
+                command = None
+            elif "summon" in title or "card claimed" in title:
+                command = "summon"
+            elif "pack opened" in title:
+                command = "open-pack"
+            elif "box opened" in title:
+                command = "open-boxes"
 
         if not command or command not in COOLDOWN_SECONDS:
-            print("⚠️ Aucun cooldown associé à cet embed")
             return
 
         # Try to detect user
@@ -175,7 +183,6 @@ async def on_message(message: discord.Message):
                 user = message.guild.get_member(uid)
                 print(f"👤 Utilisateur trouvé via description (ID): {uid}")
             else:
-                # fallback pseudo si pas d'ID
                 pseudo_match = re.search(r"(Claimed By|Summoned By)\s+@?([^\n]+)", embed.description)
                 if pseudo_match:
                     pseudo = pseudo_match.group(2).strip()
@@ -227,10 +234,18 @@ async def on_message(message: discord.Message):
 
         async def cooldown_task():
             await asyncio.sleep(cd_time)
-            await message.channel.send(
-                f"✅ {user.mention}, cooldown for `/{command}` is over!"
-            )
+            try:
+                await message.channel.send(
+                    f"✅ {user.mention}, cooldown for `/{command}` is over!"
+                )
+            except Exception as e:
+                print(f"⚠️ Notification fin de cooldown échouée: {e}")
 
         asyncio.create_task(cooldown_task())
 
+# ----------------
+# Entrée du programme
+# ----------------
+if not TOKEN:
+    raise RuntimeError("DISCORD_TOKEN manquant dans les variables d'environnement.")
 client.run(TOKEN)
