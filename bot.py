@@ -120,121 +120,87 @@ async def on_message(message: discord.Message):
     if message.guild and message.guild.id != GUILD_ID:
         return
 
-    if message.author.bot and message.author.id == MAZOKU_BOT_ID and message.embeds:
-        embed = message.embeds[0]
-
-        print("=== DEBUG EMBED ===")
-        print(f"Title: {embed.title}")
-        print(f"Description: {embed.description}")
-        print("===================")
-
-        # Detect command
-        command = None
+    if message.author.bot and message.author.id == MAZOKU_BOT_ID:
         user = None
-        if embed.title:
-            title = embed.title.lower()
+        cmd = None
 
-            if title == "summon":
-                command = "summon"
-                # Essaye via interaction
-                if hasattr(message, "interaction") and message.interaction and message.interaction.user:
-                    user = message.interaction.user
-                # Sinon, parse "X used summon"
-                if not user and embed.description:
-                    match = re.search(r"(.+?) used summon", embed.description)
-                    if match:
-                        pseudo = match.group(1).strip()
-                        for member in message.guild.members:
-                            if member.display_name == pseudo or member.name == pseudo:
-                                user = member
-                                break
+        # --- Cas 1 : via interaction (slash command directe) ---
+        if message.interaction:
+            cmd = message.interaction.name
+            user = message.interaction.user
+            print(f"🎯 Detected /{cmd} by {user} ({user.id})")
 
-            elif "summon claimed" in title:
-                command = "summon"
+        # --- Cas 2 : fallback via embed ---
+        elif message.embeds:
+            embed = message.embeds[0]
+            title = embed.title.lower() if embed.title else ""
+
+            if "summon claimed" in title:
+                cmd = "summon"
                 # Cherche "Claimed By" dans description
                 if embed.description:
                     match = re.search(r"Claimed By\s+<@!?(\d+)>", embed.description)
                     if match:
-                        uid = int(match.group(1))
-                        user = message.guild.get_member(uid)
+                        user = message.guild.get_member(int(match.group(1)))
                 # Cherche aussi dans les fields
                 if not user and embed.fields:
                     for field in embed.fields:
                         match = re.search(r"Claimed By\s+<@!?(\d+)>", field.value)
                         if match:
-                            uid = int(match.group(1))
-                            user = message.guild.get_member(uid)
+                            user = message.guild.get_member(int(match.group(1)))
                             break
                 # Cherche dans le footer
                 if not user and embed.footer and embed.footer.text:
                     match = re.search(r"Claimed By\s+<@!?(\d+)>", embed.footer.text)
                     if match:
-                        uid = int(match.group(1))
-                        user = message.guild.get_member(uid)
+                        user = message.guild.get_member(int(match.group(1)))
 
                 if not user:
                     print("⚠️ Aucun utilisateur trouvé dans Summon Claimed")
 
             elif "pack opened" in title:
-                command = "open-pack"
+                cmd = "open-pack"
             elif "box opened" in title:
-                command = "open-boxes"
+                cmd = "open-boxes"
+            elif "auto summon" in title:
+                cmd = None
 
-            if "auto summon" in title:
-                command = None
+        # --- Application du cooldown ---
+        if user and cmd in COOLDOWN_SECONDS:
+            user_id = str(user.id)
+            key = f"cooldown:{user_id}:{cmd}"
 
-        if not command or command not in COOLDOWN_SECONDS:
-            return
-
-        # Fallback mentions
-        if not user and message.mentions:
-            user = message.mentions[0]
-
-        if not user:
-            print("⚠️ Aucun utilisateur détecté dans cet embed")
-            return
-
-        user_id = str(user.id)
-        key = f"cooldown:{user_id}:{command}"
-
-        ttl = await client.redis.ttl(key)
-        if ttl > 0:
-            await message.channel.send(
-                f"⏳ {user.mention}, you are still on cooldown for `/{command}` ({ttl}s left)!"
-            )
-            return
-
-        cd_time = COOLDOWN_SECONDS[command]
-        await client.redis.setex(key, cd_time, "1")
-        print(f"✅ Cooldown posé: {key} TTL={cd_time}")
-
-        # Log début
-        log_channel = message.guild.get_channel(LOG_CHANNEL_ID)
-        if log_channel:
-            await log_channel.send(
-                f"📌 Cooldown démarré pour {user.mention} → `/{command}` ({cd_time}s)"
-            )
-
-        async def cooldown_task():
-            await asyncio.sleep(cd_time)
-            try:
-                # Message public
+            ttl = await client.redis.ttl(key)
+            if ttl > 0:
                 await message.channel.send(
-                    f"✅ {user.mention}, cooldown for `/{command}` is over!"
+                    f"⏳ {user.mention}, you are still on cooldown for `/{cmd}` ({ttl}s left)!"
                 )
-                # Log fin
-                if log_channel:
-                    await log_channel.send(
-                        f"🕒 Fin du cooldown pour {user.mention} → `/{command}`"
+                return
+
+            cd_time = COOLDOWN_SECONDS[cmd]
+            await client.redis.setex(key, cd_time, "1")
+            print(f"✅ Cooldown posé: {key} TTL={cd_time}")
+
+            # Log début
+            log_channel = message.guild.get_channel(LOG_CHANNEL_ID)
+            if log_channel:
+                await log_channel.send(
+                    f"📌 Cooldown démarré pour {user.mention} → `/{cmd}` ({cd_time}s)"
+                )
+
+            async def cooldown_task():
+                await asyncio.sleep(cd_time)
+                try:
+                    # Message public
+                    await message.channel.send(
+                        f"✅ {user.mention}, cooldown for `/{cmd}` is over!"
                     )
-            except Exception as e:
-                print(f"⚠️ Notification fin de cooldown échouée: {e}")
+                    # Log fin
+                    if log_channel:
+                        await log_channel.send(
+                            f"🕒 Fin du cooldown pour {user.mention} → `/{cmd}`"
+                        )
+                except Exception as e:
+                    print(f"⚠️ Notification fin de cooldown échouée: {e}")
 
-        asyncio.create_task(cooldown_task())
-
-# ----------------
-# Entrée du programme
-# ----------------
-if not TOKEN:
-    raise RuntimeError("DISCORD_TOKEN manquant dans les variables d'environnement.")
-client.run(TOKEN)
+            asyncio.create_task(cooldown_task())
