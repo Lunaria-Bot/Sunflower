@@ -156,6 +156,24 @@ async def force_clear(interaction: discord.Interaction, member: discord.Member, 
 @client.event
 async def on_ready():
     print(f"✅ Logged in as {client.user} ({client.user.id})")
+    # Start rotating activities
+    client.loop.create_task(rotate_status())
+
+async def rotate_status():
+    activities = [
+        discord.Game("MoonQuill is sleeping 😴"),
+        discord.Activity(type=discord.ActivityType.watching, name="the sunflowers 🌻"),
+        discord.Activity(type=discord.ActivityType.listening, name="the wind in the fields 🌬️"),
+        discord.Activity(type=discord.ActivityType.competing, name="a sunflower growing contest 🌞")
+    ]
+    i = 0
+    while True:
+        try:
+            await client.change_presence(status=discord.Status.idle, activity=activities[i % len(activities)])
+        except Exception as e:
+            print(f"⚠️ Failed to change presence: {e}")
+        i += 1
+        await asyncio.sleep(300)  # change every 5 minutes
 
 @client.event
 async def on_message(message: discord.Message):
