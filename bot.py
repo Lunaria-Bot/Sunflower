@@ -9,6 +9,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL")
 MAZOKU_BOT_ID = 1242388858897956906
 GUILD_ID = 1196690004852883507
+LOG_CHANNEL_ID = 1420095365494866001  # Salon où envoyer les logs
 
 # Cooldown times per command (seconds)
 COOLDOWN_SECONDS = {
@@ -20,7 +21,7 @@ COOLDOWN_SECONDS = {
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
-intents.members = True  # nécessaire pour recherche par pseudo
+intents.members = True
 
 class CooldownBot(discord.Client):
     def __init__(self):
@@ -41,7 +42,6 @@ class CooldownBot(discord.Client):
             print(f"❌ Redis connection failed: {e}")
             self.redis = None
 
-        # Sync slash commands to your guild
         guild = discord.Object(id=GUILD_ID)
         self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild)
@@ -72,24 +72,10 @@ async def cooldowns_cmd(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("⏳ Active cooldowns:\n" + "\n".join(lines), ephemeral=True)
 
-# Commande de test Redis
-@client.tree.command(name="test-redis", description="Test Redis setex and ttl")
-async def test_redis(interaction: discord.Interaction):
-    if not client.redis:
-        await interaction.response.send_message("❌ Redis not connected!", ephemeral=True)
-        return
-
-    key = f"test:{interaction.user.id}"
-    await client.redis.setex(key, 10, "test")
-    ttl = await client.redis.ttl(key)
-    await interaction.response.send_message(f"Redis TTL for test key: {ttl}s", ephemeral=True)
-
-# Commande admin pour reset cooldowns
 @client.tree.command(name="force-clear", description="Réinitialise les cooldowns d'un joueur (ADMIN uniquement)")
 @app_commands.describe(member="Le membre dont vous voulez réinitialiser les cooldowns",
                        command="Optionnel: le nom de la commande à réinitialiser (ex: summon, open-boxes, open-pack)")
 async def force_clear(interaction: discord.Interaction, member: discord.Member, command: str = None):
-    # Vérifie si l'utilisateur est admin
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Vous devez être administrateur pour utiliser cette commande.", ephemeral=True)
         return
@@ -108,7 +94,6 @@ async def force_clear(interaction: discord.Interaction, member: discord.Member, 
         key = f"cooldown:{user_id}:{command}"
         deleted = await client.redis.delete(key)
     else:
-        # Supprime toutes les clés de cooldown pour ce joueur
         for cmd in COOLDOWN_SECONDS.keys():
             key = f"cooldown:{user_id}:{cmd}"
             result = await client.redis.delete(key)
@@ -130,89 +115,50 @@ async def on_ready():
 async def on_message(message: discord.Message):
     if not client.redis:
         return
-
     if message.author.id == client.user.id:
         return
     if message.guild and message.guild.id != GUILD_ID:
-        return  # only work in your server
+        return
 
-    # Only listen to Mazoku bot
     if message.author.bot and message.author.id == MAZOKU_BOT_ID and message.embeds:
         embed = message.embeds[0]
 
-        # Debug full embed
         print("=== DEBUG EMBED ===")
         print(f"Title: {embed.title}")
         print(f"Description: {embed.description}")
-        print(f"Footer: {embed.footer.text if embed.footer else None}")
-        for i, field in enumerate(embed.fields):
-            print(f"Field {i}: name={field.name}, value={field.value}")
         print("===================")
 
         # Detect command
         command = None
+        user = None
         if embed.title:
             title = embed.title.lower()
 
-            # Uniquement les trois cas demandés
-            if title.startswith("summon"):   # ex: "Summon"
+            if title == "summon":
                 command = "summon"
-            elif "pack opened" in title:     # ex: "Premium Pack Opened"
+                if hasattr(message, "interaction") and message.interaction and message.interaction.user:
+                    user = message.interaction.user
+                    print(f"👤 Utilisateur trouvé via interaction (summon): {user} ({user.id})")
+            elif "pack opened" in title:
                 command = "open-pack"
-            elif "box opened" in title:      # ex: "Refreshing Box Opened"
+            elif "box opened" in title:
                 command = "open-boxes"
 
-            # Pas de cooldown pour Auto Summon, et on ignore Summon/Card Claimed
             if "auto summon" in title:
                 command = None
 
         if not command or command not in COOLDOWN_SECONDS:
             return
 
-        # Try to detect user
-        user = None
-
-        # 1. Mentions directes
-        if message.mentions:
-            user = message.mentions[0]
-            print(f"👤 Utilisateur trouvé via mention: {user}")
-
-        # 2. Regex dans description
-        if not user and embed.description:
-            match = re.search(r"<@!?(\d+)>", embed.description)
-            if match:
-                uid = int(match.group(1))
-                user = message.guild.get_member(uid)
-                print(f"👤 Utilisateur trouvé via description (ID): {uid}")
-            else:
-                # Fallback par pseudo si pas de mention
-                pseudo_match = re.search(r"(Claimed By|Summoned By|Opened By)\s+@?([^\n]+)", embed.description)
-                if pseudo_match:
-                    pseudo = pseudo_match.group(2).strip()
-                    pseudo = pseudo.replace("**", "").replace("*", "")
-                    for member in message.guild.members:
-                        if member.display_name == pseudo or member.name == pseudo:
-                            user = member
-                            print(f"👤 Utilisateur trouvé via pseudo: {pseudo}")
-                            break
-
-        # 3. Regex dans footer
-        if not user and embed.footer and embed.footer.text:
-            match = re.search(r"<@!?(\d+)>", embed.footer.text)
-            if match:
-                uid = int(match.group(1))
-                user = message.guild.get_member(uid)
-                print(f"👤 Utilisateur trouvé via footer: {uid}")
-
-        # 4. Regex dans fields
-        if not user and embed.fields:
-            for field in embed.fields:
-                match = re.search(r"<@!?(\d+)>", field.value)
+        # Si pas trouvé via interaction, fallback
+        if not user:
+            if message.mentions:
+                user = message.mentions[0]
+            elif embed.description:
+                match = re.search(r"<@!?(\d+)>", embed.description)
                 if match:
                     uid = int(match.group(1))
                     user = message.guild.get_member(uid)
-                    print(f"👤 Utilisateur trouvé via field: {uid}")
-                    break
 
         if not user:
             print("⚠️ Aucun utilisateur détecté dans cet embed")
@@ -221,7 +167,6 @@ async def on_message(message: discord.Message):
         user_id = str(user.id)
         key = f"cooldown:{user_id}:{command}"
 
-        # Check existing cooldown
         ttl = await client.redis.ttl(key)
         if ttl > 0:
             await message.channel.send(
@@ -229,11 +174,16 @@ async def on_message(message: discord.Message):
             )
             return
 
-        # Start cooldown
         cd_time = COOLDOWN_SECONDS[command]
         await client.redis.setex(key, cd_time, "1")
-        ttl_after = await client.redis.ttl(key)
-        print(f"✅ Cooldown posé: {key} TTL={ttl_after}")
+        print(f"✅ Cooldown posé: {key} TTL={cd_time}")
+
+        # Envoi d'une confirmation dans le salon choisi
+        log_channel = message.guild.get_channel(LOG_CHANNEL_ID)
+        if log_channel:
+            await log_channel.send(
+                f"📌 Cooldown démarré pour {user.mention} → `/{command}` ({cd_time}s)"
+            )
 
         async def cooldown_task():
             await asyncio.sleep(cd_time)
