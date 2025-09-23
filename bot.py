@@ -9,7 +9,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL")
 MAZOKU_BOT_ID = 1242388858897956906
 GUILD_ID = 1196690004852883507
-LOG_CHANNEL_ID = 1420095365494866001  # Salon où envoyer les logs
+LOG_CHANNEL_ID = 1420095365494866001  # Channel for logs
 
 # Cooldown times per command (seconds)
 COOLDOWN_SECONDS = {
@@ -59,11 +59,11 @@ async def cooldowns_cmd(interaction: discord.Interaction):
 
     user_id = str(interaction.user.id)
 
-    # Embed aux couleurs "tournesol"
+    # Sunflower-themed embed
     embed = discord.Embed(
-        title="🌻 MoonQuill te rappelle :",
-        description="Voici tes temps restants avant de pouvoir rejouer !",
-        color=discord.Color.from_rgb(255, 204, 0)  # jaune tournesol
+        title="🌻 MoonQuill remind you :",
+        description="Here are your remaining cooldowns before you can play again!",
+        color=discord.Color.from_rgb(255, 204, 0)  # sunflower yellow
     )
     embed.set_author(
         name=interaction.user.display_name,
@@ -79,7 +79,7 @@ async def cooldowns_cmd(interaction: discord.Interaction):
         mins, secs = divmod(ttl, 60)
         embed.add_field(
             name="✨ Summon",
-            value=f"⏱️ {mins}m {secs}s restants",
+            value=f"⏱️ {mins}m {secs}s left",
             inline=False
         )
         found = True
@@ -91,43 +91,43 @@ async def cooldowns_cmd(interaction: discord.Interaction):
         mins, secs = divmod(ttl, 60)
         embed.add_field(
             name="🎁 Premium Packs",
-            value=f"⏱️ {mins}m {secs}s restants",
+            value=f"⏱️ {mins}m {secs}s left",
             inline=False
         )
         found = True
 
-    # Box Opened
+    # Boxes
     key = f"cooldown:{user_id}:open-boxes"
     ttl = await client.redis.ttl(key)
     if ttl > 0:
         mins, secs = divmod(ttl, 60)
         embed.add_field(
-            name="📦 Box",
-            value=f"⏱️ {mins}m {secs}s restants",
+            name="📦 Boxes",
+            value=f"⏱️ {mins}m {secs}s left",
             inline=False
         )
         found = True
 
     if not found:
-        embed.description = "✅ Aucun cooldown actif, profite du soleil ☀️"
+        embed.description = "✅ No active cooldowns, enjoy the sunshine ☀️"
         embed.color = discord.Color.green()
 
-    # Footer inspirant
-    embed.set_footer(text="Comme un tournesol, tourne-toi vers la lumière 🌞")
+    # Inspiring footer
+    embed.set_footer(text="Like a sunflower, always turn towards the light 🌞")
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-@client.tree.command(name="force-clear", description="Réinitialise les cooldowns d'un joueur (ADMIN uniquement)")
-@app_commands.describe(member="Le membre dont vous voulez réinitialiser les cooldowns",
-                       command="Optionnel: le nom de la commande à réinitialiser (ex: summon, open-boxes, open-pack)")
+@client.tree.command(name="force-clear", description="Reset a player's cooldowns (ADMIN only)")
+@app_commands.describe(member="The member whose cooldowns you want to reset",
+                       command="Optional: the command name to reset (e.g. summon, open-boxes, open-pack)")
 async def force_clear(interaction: discord.Interaction, member: discord.Member, command: str = None):
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ Vous devez être administrateur pour utiliser cette commande.", ephemeral=True)
+        await interaction.response.send_message("❌ You must be an administrator to use this command.", ephemeral=True)
         return
 
     if not client.redis:
-        await interaction.response.send_message("❌ Redis non connecté.", ephemeral=True)
+        await interaction.response.send_message("❌ Redis not connected.", ephemeral=True)
         return
 
     user_id = str(member.id)
@@ -135,7 +135,7 @@ async def force_clear(interaction: discord.Interaction, member: discord.Member, 
 
     if command:
         if command not in COOLDOWN_SECONDS:
-            await interaction.response.send_message(f"⚠️ Commande inconnue: `{command}`", ephemeral=True)
+            await interaction.response.send_message(f"⚠️ Unknown command: `{command}`", ephemeral=True)
             return
         key = f"cooldown:{user_id}:{command}"
         deleted = await client.redis.delete(key)
@@ -146,7 +146,7 @@ async def force_clear(interaction: discord.Interaction, member: discord.Member, 
             deleted += result
 
     await interaction.response.send_message(
-        f"✅ Cooldowns réinitialisés pour {member.mention} ({deleted} supprimés).",
+        f"✅ Cooldowns reset for {member.mention} ({deleted} removed).",
         ephemeral=True
     )
 
@@ -170,13 +170,13 @@ async def on_message(message: discord.Message):
         user = None
         cmd = None
 
-        # --- Cas 1 : via interaction (slash command directe) ---
+        # --- Case 1: via interaction (direct slash command) ---
         if getattr(message, "interaction", None):
             cmd = message.interaction.name
             user = message.interaction.user
             print(f"🎯 Detected /{cmd} by {user} ({user.id})")
 
-        # --- Cas 2 : fallback via embed ---
+        # --- Case 2: fallback via embed ---
         elif message.embeds:
             embed = message.embeds[0]
             title = embed.title.lower() if embed.title else ""
@@ -201,25 +201,7 @@ async def on_message(message: discord.Message):
                         user = message.guild.get_member(int(match.group(1)))
 
                 if not user:
-                    # Dernier recours: "Claimed by Pseudo" sans mention
-                    match = re.search(r"Claimed by\s+\*{0,2}([^*\n]+)\*{0,2}", desc, flags=re.IGNORECASE)
-                    if not match and embed.fields:
-                        for field in embed.fields:
-                            match = re.search(r"Claimed by\s+\*{0,2}([^*\n]+)\*{0,2}", field.value, flags=re.IGNORECASE)
-                            if match:
-                                break
-                    if not match and embed.footer and embed.footer.text:
-                        match = re.search(r"Claimed by\s+\*{0,2}([^*\n]+)\*{0,2}", embed.footer.text, flags=re.IGNORECASE)
-
-                    if match:
-                        pseudo = match.group(1).strip()
-                        for member in message.guild.members:
-                            if member.display_name == pseudo or member.name == pseudo:
-                                user = member
-                                break
-
-                    if not user:
-                        print("⚠️ Aucun utilisateur trouvé dans Summon Claimed")
+                    print("⚠️ No user found in Summon Claimed")
 
             elif "pack opened" in title:
                 cmd = "open-pack"
@@ -228,7 +210,7 @@ async def on_message(message: discord.Message):
             elif "auto summon" in title:
                 cmd = None
 
-        # --- Application du cooldown ---
+        # --- Apply cooldown ---
         if user and cmd in COOLDOWN_SECONDS:
             user_id = str(user.id)
             key = f"cooldown:{user_id}:{cmd}"
@@ -242,44 +224,44 @@ async def on_message(message: discord.Message):
 
             cd_time = COOLDOWN_SECONDS[cmd]
             await client.redis.setex(key, cd_time, "1")
-            print(f"✅ Cooldown posé: {key} TTL={cd_time}")
+            print(f"✅ Cooldown set: {key} TTL={cd_time}")
 
-            # Log début
+            # Log start
             log_channel = message.guild.get_channel(LOG_CHANNEL_ID)
             if log_channel:
                 await log_channel.send(
-                    f"📌 Cooldown démarré pour {user.mention} → `/{cmd}` ({cd_time}s)"
+                    f"📌 Cooldown started for {user.mention} → `/{cmd}` ({cd_time}s)"
                 )
 
             async def cooldown_task():
                 await asyncio.sleep(cd_time)
                 try:
-                    # Message public avec thème Sunflower
+                    # Public message with Sunflower theme
                     end_embed = discord.Embed(
-                        title="🌞 Cooldown terminé !",
+                        title="🌞 Cooldown finished!",
                         description=(
-                            f"{user.mention}, ton **/{cmd}** est de nouveau disponible.\n\n"
-                            "Comme un tournesol, profite de cette nouvelle lumière 🌻"
+                            f"{user.mention}, your **/{cmd}** is available again.\n\n"
+                            "Like a sunflower, enjoy this new light 🌻"
                         ),
                         color=discord.Color.from_rgb(255, 204, 0)
                     )
-                    end_embed.set_footer(text="MoonQuill veille sur toi ✨")
+                    end_embed.set_footer(text="MoonQuill is watching over you ✨")
 
                     await message.channel.send(embed=end_embed)
 
-                    # Log fin
+                    # Log end
                     if log_channel:
                         await log_channel.send(
-                            f"🕒 Fin du cooldown pour {user.mention} → `/{cmd}`"
+                            f"🕒 Cooldown ended for {user.mention} → `/{cmd}`"
                         )
                 except Exception as e:
-                    print(f"⚠️ Notification fin de cooldown échouée: {e}")
+                    print(f"⚠️ Cooldown end notification failed: {e}")
 
             asyncio.create_task(cooldown_task())
 
 # ----------------
-# Entrée du programme
+# Entry point
 # ----------------
 if not TOKEN:
-    raise RuntimeError("DISCORD_TOKEN manquant dans les variables d'environnement.")
+    raise RuntimeError("DISCORD_TOKEN is missing from environment variables.")
 client.run(TOKEN)
