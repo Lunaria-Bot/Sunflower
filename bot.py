@@ -151,9 +151,23 @@ async def on_message(message: discord.Message):
 
             elif "summon claimed" in title:
                 command = "summon"
-                # Cherche "Claimed By"
+                # Cherche "Claimed By" dans description
                 if embed.description:
                     match = re.search(r"Claimed By\s+<@!?(\d+)>", embed.description)
+                    if match:
+                        uid = int(match.group(1))
+                        user = message.guild.get_member(uid)
+                # Cherche aussi dans les fields
+                if not user and embed.fields:
+                    for field in embed.fields:
+                        match = re.search(r"Claimed By\s+<@!?(\d+)>", field.value)
+                        if match:
+                            uid = int(match.group(1))
+                            user = message.guild.get_member(uid)
+                            break
+                # Cherche dans le footer
+                if not user and embed.footer and embed.footer.text:
+                    match = re.search(r"Claimed By\s+<@!?(\d+)>", embed.footer.text)
                     if match:
                         uid = int(match.group(1))
                         user = message.guild.get_member(uid)
