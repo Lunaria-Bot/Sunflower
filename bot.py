@@ -5,7 +5,7 @@ import os
 import redis.asyncio as aioredis  # async Redis client
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-REDIS_URL = os.getenv("REDIS_URL")  # Railway fournit cette variable
+REDIS_URL = os.getenv("REDIS_URL")
 MAZOKU_BOT_ID = 1242388858897956906
 GUILD_ID = 1196690004852883507
 
@@ -98,8 +98,16 @@ async def on_message(message: discord.Message):
     if message.guild and message.guild.id != GUILD_ID:
         return  # only work in your server
 
+    # Debug logs
+    print(f"📩 Message reçu de {message.author} ({message.author.id})")
+    if message.embeds:
+        print(f"➡️ Embed détecté: {message.embeds[0].title}")
+    else:
+        print("⚠️ Pas d'embed dans ce message")
+        return
+
     # Only listen to Mazoku bot
-    if message.author.bot and message.author.id == MAZOKU_BOT_ID and message.embeds:
+    if message.author.bot and message.author.id == MAZOKU_BOT_ID:
         embed = message.embeds[0]
         command = None
 
@@ -110,11 +118,23 @@ async def on_message(message: discord.Message):
             command = "open-boxes"
 
         if not command or command not in COOLDOWN_SECONDS:
+            print("⚠️ Aucun cooldown associé à cet embed")
             return
 
         # Detect mentioned user
         user = message.mentions[0] if message.mentions else None
+
+        # Si pas de mention, tenter de récupérer depuis description
+        if not user and embed.description:
+            # Exemple: "Player <@123456789> did something"
+            import re
+            match = re.search(r"<@!?(\d+)>", embed.description)
+            if match:
+                user_id = int(match.group(1))
+                user = message.guild.get_member(user_id)
+
         if not user:
+            print("⚠️ Aucun utilisateur détecté dans ce message")
             return
 
         user_id = str(user.id)
@@ -130,8 +150,9 @@ async def on_message(message: discord.Message):
 
         # Start cooldown silently
         cd_time = COOLDOWN_SECONDS[command]
-        print(f"➡️ Setting cooldown key {key} for {cd_time}s")
         await client.redis.setex(key, cd_time, "1")
+        ttl_after = await client.redis.ttl(key)
+        print(f"✅ Cooldown posé: {key} TTL={ttl_after}")
 
         async def cooldown_task():
             await asyncio.sleep(cd_time)
