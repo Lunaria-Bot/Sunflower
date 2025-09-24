@@ -258,7 +258,7 @@ async def on_message(message: discord.Message):
                 role = message.guild.get_role(ROLE_ID_E)
                 if role:
                     await message.channel.send(
-                        f"{role.mention} ⚡ Une carte spéciale avec l’emoji :e: vient de spawn en autosummon !"
+                        f"{role.mention} 💖 A High Tier card just spawned !  !"
                     )
 
     # ----------------
