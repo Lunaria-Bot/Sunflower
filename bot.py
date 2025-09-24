@@ -8,16 +8,15 @@ import redis.asyncio as aioredis
 TOKEN = os.getenv("DISCORD_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL")
 
-# IDs (replace with yours)
+# IDs (remplace par les tiens)
 MAZOKU_BOT_ID = 1242388858897956906
 GUILD_ID = 1196690004852883507
-LOG_CHANNEL_ID = 1420095365494866001  # Channel for logs
+LOG_CHANNEL_ID = 1420095365494866001  # Salon pour logs
 
 # Cooldown times per command (seconds)
 COOLDOWN_SECONDS = {
     "summon": 1800,      # 30 min
-    "open-boxes": 60,    # 1 min
-    "open-pack": 60      # 1 min
+    "open-boxes": 60     # 1 min
 }
 
 intents = discord.Intents.default()
@@ -51,7 +50,7 @@ class CooldownBot(discord.Client):
 client = CooldownBot()
 
 # ----------------
-# Slash commands
+# Slash Commands
 # ----------------
 @client.tree.command(name="cooldowns", description="Check your active cooldowns")
 async def cooldowns_cmd(interaction: discord.Interaction):
@@ -72,7 +71,6 @@ async def cooldowns_cmd(interaction: discord.Interaction):
     )
 
     found = False
-
     for cmd in COOLDOWN_SECONDS.keys():
         key = f"cooldown:{user_id}:{cmd}"
         ttl = await client.redis.ttl(key)
@@ -95,7 +93,7 @@ async def cooldowns_cmd(interaction: discord.Interaction):
 
 @client.tree.command(name="force-clear", description="Reset a player's cooldowns (ADMIN only)")
 @app_commands.describe(member="The member whose cooldowns you want to reset",
-                       command="Optional: the command name to reset (e.g. summon, open-boxes, open-pack)")
+                       command="Optional: the command name to reset (summon, open-boxes)")
 async def force_clear(interaction: discord.Interaction, member: discord.Member, command: str = None):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ You must be an administrator to use this command.", ephemeral=True)
@@ -127,7 +125,7 @@ async def force_clear(interaction: discord.Interaction, member: discord.Member, 
 
 
 @client.tree.command(name="toggle-reminder", description="Enable or disable reminders for a specific command")
-@app_commands.describe(command="The command to toggle reminders for (summon, open-pack, open-boxes)")
+@app_commands.describe(command="The command to toggle reminders for (summon, open-boxes)")
 async def toggle_reminder(interaction: discord.Interaction, command: str):
     if not client.redis:
         await interaction.response.send_message("❌ Redis not connected!", ephemeral=True)
@@ -155,6 +153,81 @@ async def toggle_reminder(interaction: discord.Interaction, command: str):
     )
     embed.set_footer(text="You can toggle again anytime with /toggle-reminder")
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# ----------------
+# Leaderboard Commands
+# ----------------
+@client.tree.command(name="leaderboard", description="Show the autosummon leaderboard")
+async def leaderboard(interaction: discord.Interaction):
+    if not client.redis:
+        await interaction.response.send_message("❌ Redis not connected!", ephemeral=True)
+        return
+
+    keys = await client.redis.keys("leaderboard:*")
+    scores = []
+    for key in keys:
+        if key.endswith(":paused"):
+            continue
+        parts = key.split(":")
+        if len(parts) != 2:
+            continue
+        user_id = parts[1]
+        score_val = await client.redis.get(key)
+        if score_val is None:
+            continue
+        score = int(score_val)
+        scores.append((user_id, score))
+
+    scores.sort(key=lambda x: x[1], reverse=True)
+    top = scores[:10]
+
+    embed = discord.Embed(
+        title="🏆 Autosummon Leaderboard",
+        color=discord.Color.gold()
+    )
+
+    if not top:
+        embed.description = "Aucun point pour l’instant 🌻"
+    else:
+        lines = []
+        for i, (uid, score) in enumerate(top, start=1):
+            member = interaction.guild.get_member(int(uid))
+            name = member.display_name if member else f"User {uid}"
+            lines.append(f"**{i}. {name}** — {score} pts")
+        embed.description = "\n".join(lines)
+
+    await interaction.response.send_message(embed=embed)
+
+
+@client.tree.command(name="leaderboard_reset", description="Reset the leaderboard (ADMIN only)")
+async def leaderboard_reset(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+        return
+
+    keys = await client.redis.keys("leaderboard:*")
+    deleted = 0
+    for key in keys:
+        deleted += await client.redis.delete(key)
+
+    await interaction.response.send_message(f"✅ Leaderboard reset ({deleted} entries removed).", ephemeral=True)
+
+
+@client.tree.command(name="leaderboard_pause", description="Pause or resume the leaderboard scoring (ADMIN only)")
+async def leaderboard_pause(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+        return
+
+    paused = await client.redis.get("leaderboard:paused")
+    if paused == "true":
+        await client.redis.set("leaderboard:paused", "false")
+        status = "▶️ Leaderboard resumed"
+    else:
+        await client.redis.set("leaderboard:paused", "true")
+        status = "⏸️ Leaderboard paused"
+
+    await interaction.response.send_message(status, ephemeral=True)
 
 # ----------------
 # Events
@@ -208,6 +281,7 @@ async def on_message(message: discord.Message):
         title = (embed.title or "").lower()
         desc = embed.description or ""
 
+        # Detect regular summon claimed (cooldown handling)
         if "summon claimed" in title:
             cmd = "summon"
             match = re.search(r"Claimed By\s+<@!?(\d+)>", desc)
@@ -229,16 +303,44 @@ async def on_message(message: discord.Message):
             if not user:
                 print("⚠️ No user found in Summon Claimed")
 
-        elif "pack opened" in title:
-            cmd = "open-pack"
-
+        # Detect boxes opened (cooldown handling)
         elif "box opened" in title:
             cmd = "open-boxes"
 
-        elif "auto summon" in title:
-            cmd = None  # ignore automatic summons
+        # Detect autosummon and award leaderboard point
+        # No cooldown linked to autosummon, only scoring
+        if "auto summon" in title:
+            # Try to find the claimer in description/fields/footer
+            auto_user = None
+            match = re.search(r"Claimed By\s+<@!?(\d+)>", desc)
+            if match:
+                auto_user = message.guild.get_member(int(match.group(1)))
 
-    # Apply cooldown
+            if not auto_user and embed.fields:
+                for field in embed.fields:
+                    match = re.search(r"Claimed By\s+<@!?(\d+)>", field.value)
+                    if match:
+                        auto_user = message.guild.get_member(int(match.group(1)))
+                        break
+
+            if not auto_user and embed.footer and embed.footer.text:
+                match = re.search(r"Claimed By\s+<@!?(\d+)>", embed.footer.text)
+                if match:
+                    auto_user = message.guild.get_member(int(match.group(1)))
+
+            if auto_user:
+                paused = await client.redis.get("leaderboard:paused")
+                if paused != "true":
+                    await client.redis.incr(f"leaderboard:{auto_user.id}")
+                    print(f"🏆 {auto_user} gained 1 point (autosummon)")
+                    # Optional: log to channel
+                    log_channel = message.guild.get_channel(LOG_CHANNEL_ID)
+                    if log_channel:
+                        await log_channel.send(f"🏆 +1 point for {auto_user.mention} (autosummon)")
+            else:
+                print("⚠️ Autosummon detected but no claimer found")
+
+    # Apply cooldown for detected commands
     if user and cmd in COOLDOWN_SECONDS:
         user_id = str(user.id)
         key = f"cooldown:{user_id}:{cmd}"
