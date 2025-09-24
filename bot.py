@@ -175,8 +175,7 @@ async def leaderboard(interaction: discord.Interaction):
         score_val = await client.redis.get(key)
         if score_val is None:
             continue
-        score = int(score_val)
-        scores.append((user_id, score))
+        scores.append((user_id, int(score_val)))
 
     scores.sort(key=lambda x: x[1], reverse=True)
     top = scores[:10]
@@ -251,7 +250,7 @@ async def rotate_status():
         except Exception as e:
             print(f"⚠️ Failed to change presence: {e}")
         i += 1
-        await asyncio.sleep(300)  # change every 5 minutes
+        await asyncio.sleep(300)
 
 @client.event
 async def on_message(message: discord.Message):
@@ -281,13 +280,15 @@ async def on_message(message: discord.Message):
         title = (embed.title or "").lower()
         desc = embed.description or ""
 
-        # Detect regular summon claimed (cooldown handling)
+        # --- Summon claimed (cooldown) ---
         if "summon claimed" in title:
             cmd = "summon"
+            # Try mention pattern
             match = re.search(r"Claimed By\s+<@!?(\d+)>", desc)
             if match:
                 user = message.guild.get_member(int(match.group(1)))
 
+            # Try fields
             if not user and embed.fields:
                 for field in embed.fields:
                     match = re.search(r"Claimed By\s+<@!?(\d+)>", field.value)
@@ -295,6 +296,7 @@ async def on_message(message: discord.Message):
                         user = message.guild.get_member(int(match.group(1)))
                         break
 
+            # Try footer
             if not user and embed.footer and embed.footer.text:
                 match = re.search(r"Claimed By\s+<@!?(\d+)>", embed.footer.text)
                 if match:
@@ -303,44 +305,80 @@ async def on_message(message: discord.Message):
             if not user:
                 print("⚠️ No user found in Summon Claimed")
 
-        # Detect boxes opened (cooldown handling)
+        # --- Boxes opened (cooldown) ---
         elif "box opened" in title:
             cmd = "open-boxes"
 
-        # Detect autosummon and award leaderboard point
-        # No cooldown linked to autosummon, only scoring
+        # --- Autosummon (leaderboard, no cooldown) ---
         if "auto summon" in title:
-            # Try to find the claimer in description/fields/footer
-            auto_user = None
-            match = re.search(r"Claimed By\s+<@!?(\d+)>", desc)
-            if match:
-                auto_user = message.guild.get_member(int(match.group(1)))
+            print("🔎 Autosummon detected, trying to identify claimer...")
 
+            def resolve_member_by_name(name: str) -> discord.Member | None:
+                if not name:
+                    return None
+                name = name.strip()
+                # Exact display name
+                for m in message.guild.members:
+                    if m.display_name == name:
+                        return m
+                # Case-insensitive username
+                name_lower = name.lower()
+                for m in message.guild.members:
+                    if m.name.lower() == name_lower:
+                        return m
+                return None
+
+            auto_user = None
+
+            # 1) Mention pattern in description
+            m = re.search(r"Claimed By\s+<@!?(\d+)>", desc, flags=re.IGNORECASE)
+            if m:
+                auto_user = message.guild.get_member(int(m.group(1)))
+
+            # 2) Plain text "Claimed By <name>" in description
+            if not auto_user:
+                m = re.search(r"Claimed By\s+([^\n<]+)", desc, flags=re.IGNORECASE)
+                if m:
+                    auto_user = resolve_member_by_name(m.group(1))
+
+            # 3) Fields
             if not auto_user and embed.fields:
                 for field in embed.fields:
-                    match = re.search(r"Claimed By\s+<@!?(\d+)>", field.value)
-                    if match:
-                        auto_user = message.guild.get_member(int(match.group(1)))
+                    m_id = re.search(r"Claimed By\s+<@!?(\d+)>", field.value, flags=re.IGNORECASE)
+                    if m_id:
+                        auto_user = message.guild.get_member(int(m_id.group(1)))
                         break
+                    m_txt = re.search(r"Claimed By\s+([^\n<]+)", field.value, flags=re.IGNORECASE)
+                    if m_txt:
+                        auto_user = resolve_member_by_name(m_txt.group(1))
+                        if auto_user:
+                            break
 
+            # 4) Footer
             if not auto_user and embed.footer and embed.footer.text:
-                match = re.search(r"Claimed By\s+<@!?(\d+)>", embed.footer.text)
-                if match:
-                    auto_user = message.guild.get_member(int(match.group(1)))
+                m_id = re.search(r"Claimed By\s+<@!?(\d+)>", embed.footer.text, flags=re.IGNORECASE)
+                if m_id:
+                    auto_user = message.guild.get_member(int(m_id.group(1)))
+                else:
+                    m_txt = re.search(r"Claimed By\s+([^\n<]+)", embed.footer.text, flags=re.IGNORECASE)
+                    if m_txt:
+                        auto_user = resolve_member_by_name(m_txt.group(1))
 
             if auto_user:
                 paused = await client.redis.get("leaderboard:paused")
-                if paused != "true":
-                    await client.redis.incr(f"leaderboard:{auto_user.id}")
-                    print(f"🏆 {auto_user} gained 1 point (autosummon)")
+                if paused == "true":
+                    print(f"⏸️ Leaderboard paused, no points added for {auto_user}.")
+                else:
+                    new_score = await client.redis.incr(f"leaderboard:{auto_user.id}")
+                    print(f"🏆 {auto_user} gained 1 point (autosummon). New score={new_score}")
                     # Optional: log to channel
                     log_channel = message.guild.get_channel(LOG_CHANNEL_ID)
                     if log_channel:
-                        await log_channel.send(f"🏆 +1 point for {auto_user.mention} (autosummon)")
+                        await log_channel.send(f"🏆 +1 point for {auto_user.mention} (autosummon) — total {new_score}")
             else:
-                print("⚠️ Autosummon detected but no claimer found")
+                print("⚠️ Autosummon detected but no claimer found (no mention and name resolution failed)")
 
-    # Apply cooldown for detected commands
+    # --- Apply cooldown for detected commands ---
     if user and cmd in COOLDOWN_SECONDS:
         user_id = str(user.id)
         key = f"cooldown:{user_id}:{cmd}"
