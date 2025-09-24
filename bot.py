@@ -14,7 +14,7 @@ GUILD_ID = 1196690004852883507
 LOG_CHANNEL_ID = 1420095365494866001  # Channel for logs
 ROLE_ID_E = 1420099864548868167       # Rôle à ping
 
-# Emojis rares Mazoku (IDs)
+# Emojis rares Mazoku (IDs connus)
 RARITY_EMOTES = {
     "1342202597389373530": "SR",   # Super Rare
     "1342202212948115510": "SSR",  # Super Super Rare
@@ -254,6 +254,15 @@ async def on_message(message: discord.Message):
             cmd = "open-boxes"
 
         elif "auto summon" in title:
+            # Log complet de l'embed pour debug
+            print("📥 [DEBUG] Autosummon embed reçu :")
+            print(f"Title: {embed.title}")
+            print(f"Description: {embed.description}")
+            for i, field in enumerate(embed.fields):
+                print(f"Field {i} → name: {field.name} | value: {field.value}")
+            if embed.footer and embed.footer.text:
+                print(f"Footer: {embed.footer.text}")
+
             # Détection par ID d'émoji (SR/SSR/UR) dans tout l’embed
             found_rarity = None
 
@@ -268,6 +277,7 @@ async def on_message(message: discord.Message):
             for text in text_to_scan:
                 matches = EMOJI_REGEX.findall(text)
                 for emote_id in matches:
+                    print(f"🔎 Emoji détecté → ID={emote_id}")
                     if emote_id in RARITY_EMOTES:
                         found_rarity = RARITY_EMOTES[emote_id]
                         break
