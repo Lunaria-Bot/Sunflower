@@ -12,6 +12,7 @@ REDIS_URL = os.getenv("REDIS_URL")
 MAZOKU_BOT_ID = 1242388858897956906
 GUILD_ID = 1196690004852883507
 LOG_CHANNEL_ID = 1420095365494866001  # Channel for logs
+ROLE_ID_E = 1420099864548868167       # Rôle à ping quand :e: apparaît
 
 # Cooldown times per command (seconds)
 COOLDOWN_SECONDS = {
@@ -236,9 +237,33 @@ async def on_message(message: discord.Message):
             cmd = "open-boxes"
 
         elif "auto summon" in title:
-            cmd = None  # ignore automatic summons
+            # Détection de l'emoji :e:
+            found = False
 
-    # Apply cooldown
+            if ":e:" in (embed.title or ""):
+                found = True
+            if not found and ":e:" in (embed.description or ""):
+                found = True
+            if not found and embed.fields:
+                for field in embed.fields:
+                    if ":e:" in (field.name or "") or ":e:" in (field.value or ""):
+                        found = True
+                        break
+            if not found and embed.footer and embed.footer.text:
+                if ":e:" in embed.footer.text:
+                    found = True
+
+            # Si l'emoji :e: est trouvé → ping le rôle
+            if found:
+                role = message.guild.get_role(ROLE_ID_E)
+                if role:
+                    await message.channel.send(
+                        f"{role.mention} ⚡ Une carte spéciale avec l’emoji :e: vient de spawn en autosummon !"
+                    )
+
+    # ----------------
+    # Application des cooldowns
+    # ----------------
     if user and cmd in COOLDOWN_SECONDS:
         user_id = str(user.id)
         key = f"cooldown:{user_id}:{cmd}"
