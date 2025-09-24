@@ -42,10 +42,8 @@ class CooldownBot(discord.Client):
         except Exception as e:
             print(f"❌ Redis connection failed: {e}")
             self.redis = None
-
-        guild = discord.Object(id=GUILD_ID)
-        synced = await self.tree.sync(guild=guild)
-        print(f"✅ Synced {len(synced)} commands to guild {GUILD_ID}")
+        # La sync se fait dans on_ready après que toutes les commandes sont définies
+        return
 
 client = CooldownBot()
 
@@ -160,8 +158,8 @@ async def leaderboard(interaction: discord.Interaction):
 
     scores.sort(key=lambda x: x[1], reverse=True)
     top = scores[:10]
-    embed = discord.Embed(title="🏆 Autosummon Leaderboard", color=discord.Color.gold())
 
+    embed = discord.Embed(title="🏆 Autosummon Leaderboard", color=discord.Color.gold())
     if not top:
         embed.description = "Aucun point pour l’instant 🌻"
     else:
@@ -214,6 +212,12 @@ async def on_ready():
     if client.redis:
         paused = await client.redis.get("leaderboard:paused")
         print(f"🏆 Leaderboard paused = {paused}")
+
+    # Resync des commandes après définition
+    guild = discord.Object(id=GUILD_ID)
+    synced = await client.tree.sync(guild=guild)
+    print(f"🔄 Resynced {len(synced)} commands to guild {GUILD_ID}")
+
     client.loop.create_task(rotate_status())
 
 async def rotate_status():
@@ -248,7 +252,7 @@ async def on_message(message: discord.Message):
     user = None
     cmd = None
 
-    # Parse embeds from Mazoku
+    # Parse Mazoku embeds
     if message.embeds:
         embed = message.embeds[0]
         title = (embed.title or "").lower()
