@@ -7,6 +7,8 @@ import redis.asyncio as aioredis
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL")
+
+# IDs (replace with yours)
 MAZOKU_BOT_ID = 1242388858897956906
 GUILD_ID = 1196690004852883507
 LOG_CHANNEL_ID = 1420095365494866001  # Channel for logs
@@ -14,7 +16,7 @@ LOG_CHANNEL_ID = 1420095365494866001  # Channel for logs
 # Cooldown times per command (seconds)
 COOLDOWN_SECONDS = {
     "summon": 1800,      # 30 min
-    "open-boxes": 60,    #  1 min
+    "open-boxes": 60,    # 1 min
     "open-pack": 60      # 1 min
 }
 
@@ -49,7 +51,7 @@ class CooldownBot(discord.Client):
 client = CooldownBot()
 
 # ----------------
-# Slash Commands
+# Slash commands
 # ----------------
 @client.tree.command(name="cooldowns", description="Check your active cooldowns")
 async def cooldowns_cmd(interaction: discord.Interaction):
@@ -88,7 +90,70 @@ async def cooldowns_cmd(interaction: discord.Interaction):
         embed.color = discord.Color.green()
 
     embed.set_footer(text="Like a sunflower, always turn towards the light 🌞")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
+
+@client.tree.command(name="force-clear", description="Reset a player's cooldowns (ADMIN only)")
+@app_commands.describe(member="The member whose cooldowns you want to reset",
+                       command="Optional: the command name to reset (e.g. summon, open-boxes, open-pack)")
+async def force_clear(interaction: discord.Interaction, member: discord.Member, command: str = None):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You must be an administrator to use this command.", ephemeral=True)
+        return
+
+    if not client.redis:
+        await interaction.response.send_message("❌ Redis not connected.", ephemeral=True)
+        return
+
+    user_id = str(member.id)
+    deleted = 0
+
+    if command:
+        if command not in COOLDOWN_SECONDS:
+            await interaction.response.send_message(f"⚠️ Unknown command: `{command}`", ephemeral=True)
+            return
+        key = f"cooldown:{user_id}:{command}"
+        deleted = await client.redis.delete(key)
+    else:
+        for cmd in COOLDOWN_SECONDS.keys():
+            key = f"cooldown:{user_id}:{cmd}"
+            result = await client.redis.delete(key)
+            deleted += result
+
+    await interaction.response.send_message(
+        f"✅ Cooldowns reset for {member.mention} ({deleted} removed).",
+        ephemeral=True
+    )
+
+
+@client.tree.command(name="toggle-reminder", description="Enable or disable reminders for a specific command")
+@app_commands.describe(command="The command to toggle reminders for (summon, open-pack, open-boxes)")
+async def toggle_reminder(interaction: discord.Interaction, command: str):
+    if not client.redis:
+        await interaction.response.send_message("❌ Redis not connected!", ephemeral=True)
+        return
+
+    if command not in COOLDOWN_SECONDS:
+        await interaction.response.send_message(f"⚠️ Unknown command: `{command}`", ephemeral=True)
+        return
+
+    user_id = str(interaction.user.id)
+    key = f"reminder:{user_id}:{command}"
+
+    current = await client.redis.get(key)
+    if current == "off":
+        await client.redis.set(key, "on")
+        status = "✅ Reminders enabled"
+    else:
+        await client.redis.set(key, "off")
+        status = "❌ Reminders disabled"
+
+    embed = discord.Embed(
+        title="🔔 Reminder preference updated",
+        description=f"For **/{command}**: {status}",
+        color=discord.Color.from_rgb(255, 204, 0)
+    )
+    embed.set_footer(text="You can toggle again anytime with /toggle-reminder")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ----------------
@@ -113,7 +178,7 @@ async def rotate_status():
         except Exception as e:
             print(f"⚠️ Failed to change presence: {e}")
         i += 1
-        await asyncio.sleep(300)
+        await asyncio.sleep(300)  # change every 5 minutes
 
 @client.event
 async def on_message(message: discord.Message):
@@ -124,56 +189,87 @@ async def on_message(message: discord.Message):
     if message.guild and message.guild.id != GUILD_ID:
         return
 
-    if message.author.bot and message.author.id == MAZOKU_BOT_ID:
-        user = None
-        cmd = None
+    # Only react to messages from the Mazoku bot
+    if not (message.author.bot and message.author.id == MAZOKU_BOT_ID):
+        return
 
-        if getattr(message, "interaction", None):
-            cmd = message.interaction.name
-            user = message.interaction.user
-            print(f"🎯 Detected /{cmd} by {user} ({user.id})")
+    user = None
+    cmd = None
 
-        elif message.embeds:
-            embed = message.embeds[0]
-            title = embed.title.lower() if embed.title else ""
-            desc = embed.description or ""
+    # Case 1: direct slash interaction (if available)
+    if getattr(message, "interaction", None):
+        cmd = message.interaction.name
+        user = message.interaction.user
+        print(f"🎯 Detected /{cmd} by {user} ({user.id})")
 
-            if "summon claimed" in title:
-                cmd = "summon"
-                match = re.search(r"Claimed By\s+<@!?(\d+)>", desc)
+    # Case 2: parse Mazoku embeds
+    elif message.embeds:
+        embed = message.embeds[0]
+        title = (embed.title or "").lower()
+        desc = embed.description or ""
+
+        if "summon claimed" in title:
+            cmd = "summon"
+            match = re.search(r"Claimed By\s+<@!?(\d+)>", desc)
+            if match:
+                user = message.guild.get_member(int(match.group(1)))
+
+            if not user and embed.fields:
+                for field in embed.fields:
+                    match = re.search(r"Claimed By\s+<@!?(\d+)>", field.value)
+                    if match:
+                        user = message.guild.get_member(int(match.group(1)))
+                        break
+
+            if not user and embed.footer and embed.footer.text:
+                match = re.search(r"Claimed By\s+<@!?(\d+)>", embed.footer.text)
                 if match:
                     user = message.guild.get_member(int(match.group(1)))
 
-            elif "pack opened" in title:
-                cmd = "open-pack"
-            elif "box opened" in title:
-                cmd = "open-boxes"
+            if not user:
+                print("⚠️ No user found in Summon Claimed")
 
-        if user and cmd in COOLDOWN_SECONDS:
-            user_id = str(user.id)
-            key = f"cooldown:{user_id}:{cmd}"
+        elif "pack opened" in title:
+            cmd = "open-pack"
 
-            ttl = await client.redis.ttl(key)
-            if ttl > 0:
-                await message.channel.send(
-                    f"⏳ {user.mention}, you are still on cooldown for `/{cmd}` ({ttl}s left)!"
-                )
-                return
+        elif "box opened" in title:
+            cmd = "open-boxes"
 
-            cd_time = COOLDOWN_SECONDS[cmd]
-            await client.redis.setex(key, cd_time, "1")
-            print(f"✅ Cooldown set: {key} TTL={cd_time}")
+        elif "auto summon" in title:
+            cmd = None  # ignore automatic summons
 
-            log_channel = message.guild.get_channel(LOG_CHANNEL_ID)
-            if log_channel:
-                await log_channel.send(
-                    f"📌 Cooldown started for {user.mention} → `/{cmd}` ({cd_time}s)"
-                )
+    # Apply cooldown
+    if user and cmd in COOLDOWN_SECONDS:
+        user_id = str(user.id)
+        key = f"cooldown:{user_id}:{cmd}"
 
-            async def cooldown_task():
-                await asyncio.sleep(cd_time)
-                try:
-                    print(f"⏰ Cooldown finished for {user} → /{cmd}")  # Debug
+        ttl = await client.redis.ttl(key)
+        if ttl > 0:
+            await message.channel.send(
+                f"⏳ {user.mention}, you are still on cooldown for `/{cmd}` ({ttl}s left)!"
+            )
+            return
+
+        cd_time = COOLDOWN_SECONDS[cmd]
+        await client.redis.setex(key, cd_time, "1")
+        print(f"✅ Cooldown set: {key} TTL={cd_time}")
+
+        log_channel = message.guild.get_channel(LOG_CHANNEL_ID)
+        if log_channel:
+            await log_channel.send(
+                f"📌 Cooldown started for {user.mention} → `/{cmd}` ({cd_time}s)"
+            )
+
+        async def cooldown_task():
+            await asyncio.sleep(cd_time)
+            try:
+                print(f"⏰ Cooldown finished for {user} → /{cmd}")  # Debug
+
+                # Check reminder preference
+                reminder_key = f"reminder:{user.id}:{cmd}"
+                reminder_status = await client.redis.get(reminder_key)
+
+                if reminder_status != "off":
                     end_embed = discord.Embed(
                         title="🌞 Cooldown finished!",
                         description=(
@@ -183,17 +279,17 @@ async def on_message(message: discord.Message):
                         color=discord.Color.from_rgb(255, 204, 0)
                     )
                     end_embed.set_footer(text="MoonQuill is watching over you ✨")
-
                     await message.channel.send(embed=end_embed)
 
-                    if log_channel:
-                        await log_channel.send(
-                            f"🕒 Cooldown ended for {user.mention} → `/{cmd}`"
-                        )
-                except Exception as e:
-                    print(f"⚠️ Cooldown end notification failed: {e}")
+                # Log end (always)
+                if log_channel:
+                    await log_channel.send(
+                        f"🕒 Cooldown ended for {user.mention} → `/{cmd}` (reminder={'sent' if reminder_status!='off' else 'skipped'})"
+                    )
+            except Exception as e:
+                print(f"⚠️ Cooldown end notification failed: {e}")
 
-            asyncio.create_task(cooldown_task())
+        asyncio.create_task(cooldown_task())
 
 # ----------------
 # Entry point
