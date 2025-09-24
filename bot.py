@@ -12,7 +12,24 @@ REDIS_URL = os.getenv("REDIS_URL")
 MAZOKU_BOT_ID = 1242388858897956906
 GUILD_ID = 1196690004852883507
 LOG_CHANNEL_ID = 1420095365494866001  # Channel for logs
-ROLE_ID_E = 1420099864548868167       # Rôle à ping quand :e: apparaît
+ROLE_ID_E = 1420099864548868167       # Rôle à ping
+
+# Emojis rares Mazoku (IDs)
+RARITY_EMOTES = {
+    "1342202597389373530": "SR",   # Super Rare
+    "1342202212948115510": "SSR",  # Super Super Rare
+    "1342202203515125801": "UR"    # Ultra Rare
+}
+
+# Messages associés
+RARITY_MESSAGES = {
+    "UR":  "Eh a Ultra Rare Flower just bloomed  grab it !",
+    "SSR": "Eh a Super Super Rare Flower just bloomed catch it !",
+    "SR":  "Eh a Super Rare Flower just bloomed catch it !"
+}
+
+# Regex pour extraire les IDs d'émojis (<:name:id> ou <a:name:id>)
+EMOJI_REGEX = re.compile(r"<a?:\w+:(\d+)>")
 
 # Cooldown times per command (seconds)
 COOLDOWN_SECONDS = {
@@ -237,29 +254,32 @@ async def on_message(message: discord.Message):
             cmd = "open-boxes"
 
         elif "auto summon" in title:
-            # Détection de l'emoji :e:
-            found = False
+            # Détection par ID d'émoji (SR/SSR/UR) dans tout l’embed
+            found_rarity = None
 
-            if ":e:" in (embed.title or ""):
-                found = True
-            if not found and ":e:" in (embed.description or ""):
-                found = True
-            if not found and embed.fields:
+            text_to_scan = [embed.title or "", embed.description or ""]
+            if embed.fields:
                 for field in embed.fields:
-                    if ":e:" in (field.name or "") or ":e:" in (field.value or ""):
-                        found = True
-                        break
-            if not found and embed.footer and embed.footer.text:
-                if ":e:" in embed.footer.text:
-                    found = True
+                    text_to_scan.append(field.name or "")
+                    text_to_scan.append(field.value or "")
+            if embed.footer and embed.footer.text:
+                text_to_scan.append(embed.footer.text)
 
-            # Si l'emoji :e: est trouvé → ping le rôle
-            if found:
+            for text in text_to_scan:
+                matches = EMOJI_REGEX.findall(text)
+                for emote_id in matches:
+                    if emote_id in RARITY_EMOTES:
+                        found_rarity = RARITY_EMOTES[emote_id]
+                        break
+                if found_rarity:
+                    break
+
+            # Si une rareté haute est détectée → ping le rôle avec le bon message
+            if found_rarity:
                 role = message.guild.get_role(ROLE_ID_E)
                 if role:
-                    await message.channel.send(
-                        f"{role.mention} 💖 A High Tier card just spawned !  !"
-                    )
+                    msg = RARITY_MESSAGES.get(found_rarity, "A special card just spawned!")
+                    await message.channel.send(f"{role.mention} {msg}")
 
     # ----------------
     # Application des cooldowns
