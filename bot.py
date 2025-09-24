@@ -43,6 +43,26 @@ intents.messages = True
 intents.message_content = True
 intents.members = True
 
+# ----------------
+# Utilitaire safe_send
+# ----------------
+async def safe_send(channel: discord.TextChannel, *args, **kwargs):
+    """Envoie un message en gérant les rate limits (429)."""
+    try:
+        return await channel.send(*args, **kwargs)
+    except discord.HTTPException as e:
+        if getattr(e, "status", None) == 429:
+            print("⚠️ Rate limit atteint, attente 2s avant retry...")
+            await asyncio.sleep(2)
+            try:
+                return await channel.send(*args, **kwargs)
+            except Exception as e2:
+                print(f"❌ Envoi échoué après retry: {e2}")
+        else:
+            print(f"❌ Erreur HTTP lors de l'envoi: {e}")
+    except Exception as e:
+        print(f"❌ Erreur inattendue lors de l'envoi: {e}")
+
 class CooldownBot(discord.Client):
     def __init__(self):
         super().__init__(intents=intents)
@@ -289,7 +309,7 @@ async def on_message(message: discord.Message):
                 role = message.guild.get_role(ROLE_ID_E)
                 if role:
                     msg = RARITY_MESSAGES.get(found_rarity, "A special card just spawned!")
-                    await message.channel.send(f"{role.mention} {msg}")
+                    await safe_send(message.channel, f"{role.mention} {msg}")
 
     # ----------------
     # Application des cooldowns
@@ -300,7 +320,8 @@ async def on_message(message: discord.Message):
 
         ttl = await client.redis.ttl(key)
         if ttl > 0:
-            await message.channel.send(
+            await safe_send(
+                message.channel,
                 f"⏳ {user.mention}, you are still on cooldown for `/{cmd}` ({ttl}s left)!"
             )
             return
@@ -311,7 +332,8 @@ async def on_message(message: discord.Message):
 
         log_channel = message.guild.get_channel(LOG_CHANNEL_ID)
         if log_channel:
-            await log_channel.send(
+            await safe_send(
+                log_channel,
                 f"📌 Cooldown started for {user.mention} → `/{cmd}` ({cd_time}s)"
             )
 
@@ -334,11 +356,12 @@ async def on_message(message: discord.Message):
                         color=discord.Color.from_rgb(255, 204, 0)
                     )
                     end_embed.set_footer(text="MoonQuill is watching over you ✨")
-                    await message.channel.send(embed=end_embed)
+                    await safe_send(message.channel, embed=end_embed)
 
                 # Log end (always)
                 if log_channel:
-                    await log_channel.send(
+                    await safe_send(
+                        log_channel,
                         f"🕒 Cooldown ended for {user.mention} → `/{cmd}` (reminder={'sent' if reminder_status!='off' else 'skipped'})"
                     )
             except Exception as e:
