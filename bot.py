@@ -8,7 +8,7 @@ import redis.asyncio as aioredis
 TOKEN = os.getenv("DISCORD_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL")
 
-# IDs (replace with yours)
+# IDs
 MAZOKU_BOT_ID = 1242388858897956906
 GUILD_ID = 1196690004852883507
 LOG_CHANNEL_ID = 1420095365494866001   # Channel for logs
@@ -16,14 +16,13 @@ ROLE_ID_E = 1420099864548868167        # Rôle spécial (ping / autosummon)
 ROLE_ID_SUNFLOWER = 1298320344037462177  # Rôle Sunflower
 CONTACT_ID = 801879772421423115          # Contact pour rejoindre
 
-# Emojis rares Mazoku (IDs connus)
+# Emojis rares Mazoku
 RARITY_EMOTES = {
     "1342202597389373530": "SR",
     "1342202212948115510": "SSR",
     "1342202203515125801": "UR"
 }
 
-# Messages associés
 RARITY_MESSAGES = {
     "UR":  "Eh a Ultra Rare Flower just bloomed  grab it !",
     "SSR": "Eh a Super Super Rare Flower just bloomed catch it !",
@@ -47,7 +46,6 @@ intents.members = True
 # Utilitaire safe_send
 # ----------------
 async def safe_send(channel: discord.TextChannel, *args, **kwargs):
-    """Envoie un message en gérant les rate limits (429) avec un simple retry."""
     try:
         return await channel.send(*args, **kwargs)
     except discord.HTTPException as e:
@@ -85,8 +83,101 @@ class CooldownBot(discord.Client):
 client = CooldownBot()
 
 # ----------------
-# Slash command /flower
+# Slash commands
 # ----------------
+@client.tree.command(name="cooldowns", description="Check your active cooldowns")
+async def cooldowns_cmd(interaction: discord.Interaction):
+    if not client.redis:
+        await interaction.response.send_message("❌ Redis not connected!", ephemeral=True)
+        return
+
+    user_id = str(interaction.user.id)
+    embed = discord.Embed(
+        title="🌻 MoonQuill remind you :",
+        description="Here are your remaining cooldowns before you can play again!",
+        color=discord.Color.from_rgb(255, 204, 0)
+    )
+    embed.set_author(name=interaction.user.display_name,
+                     icon_url=interaction.user.display_avatar.url)
+
+    found = False
+    for cmd in COOLDOWN_SECONDS.keys():
+        key = f"cooldown:{user_id}:{cmd}"
+        ttl = await client.redis.ttl(key)
+        if ttl > 0:
+            mins, secs = divmod(ttl, 60)
+            embed.add_field(name=f"/{cmd}",
+                            value=f"⏱️ {mins}m {secs}s left",
+                            inline=False)
+            found = True
+
+    if not found:
+        embed.description = "✅ No active cooldowns, enjoy the sunshine ☀️"
+        embed.color = discord.Color.green()
+
+    embed.set_footer(text="Like a sunflower, always turn towards the light 🌞")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@client.tree.command(name="force-clear", description="Reset a player's cooldowns (ADMIN only)")
+@app_commands.describe(member="The member whose cooldowns you want to reset",
+                       command="Optional: the command name to reset")
+async def force_clear(interaction: discord.Interaction, member: discord.Member, command: str = None):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You must be an administrator.", ephemeral=True)
+        return
+
+    if not client.redis:
+        await interaction.response.send_message("❌ Redis not connected.", ephemeral=True)
+        return
+
+    user_id = str(member.id)
+    deleted = 0
+    if command:
+        if command not in COOLDOWN_SECONDS:
+            await interaction.response.send_message(f"⚠️ Unknown command: `{command}`", ephemeral=True)
+            return
+        key = f"cooldown:{user_id}:{command}"
+        deleted = await client.redis.delete(key)
+    else:
+        for cmd in COOLDOWN_SECONDS.keys():
+            key = f"cooldown:{user_id}:{cmd}"
+            deleted += await client.redis.delete(key)
+
+    await interaction.response.send_message(
+        f"✅ Cooldowns reset for {member.mention} ({deleted} removed).",
+        ephemeral=True
+    )
+
+
+@client.tree.command(name="toggle-reminder", description="Enable or disable reminders for a specific command")
+@app_commands.describe(command="The command to toggle reminders for")
+async def toggle_reminder(interaction: discord.Interaction, command: str):
+    if not client.redis:
+        await interaction.response.send_message("❌ Redis not connected!", ephemeral=True)
+        return
+    if command not in COOLDOWN_SECONDS:
+        await interaction.response.send_message(f"⚠️ Unknown command: `{command}`", ephemeral=True)
+        return
+
+    user_id = str(interaction.user.id)
+    key = f"reminder:{user_id}:{command}"
+    current = await client.redis.get(key)
+    if current == "off":
+        await client.redis.set(key, "on")
+        status = "✅ Reminders enabled"
+    else:
+        await client.redis.set(key, "off")
+        status = "❌ Reminders disabled"
+
+    embed = discord.Embed(
+        title="🔔 Reminder preference updated",
+        description=f"For **/{command}**: {status}",
+        color=discord.Color.from_rgb(255, 204, 0)
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 @client.tree.command(name="flower", description="Get the special flower role if you are part of Sunflower")
 async def flower(interaction: discord.Interaction):
     guild = interaction.guild
@@ -151,10 +242,12 @@ async def on_message(message: discord.Message):
     user = None
     cmd = None
 
+    # Si le message provient d'une interaction (rarement disponible sur les forwards)
     if getattr(message, "interaction", None):
         cmd = message.interaction.name
         user = message.interaction.user
 
+    # Sinon on parse les embeds Mazoku
     elif message.embeds:
         embed = message.embeds[0]
         title = (embed.title or "").lower()
@@ -165,6 +258,16 @@ async def on_message(message: discord.Message):
             match = re.search(r"Claimed By\s+<@!?(\d+)>", desc)
             if match:
                 user = message.guild.get_member(int(match.group(1)))
+            if not user and embed.fields:
+                for field in embed.fields:
+                    match = re.search(r"Claimed By\s+<@!?(\d+)>", field.value)
+                    if match:
+                        user = message.guild.get_member(int(match.group(1)))
+                        break
+            if not user and embed.footer and embed.footer.text:
+                match = re.search(r"Claimed By\s+<@!?(\d+)>", embed.footer.text)
+                if match:
+                    user = message.guild.get_member(int(match.group(1)))
 
         elif "pack opened" in title:
             cmd = "open-pack"
@@ -173,7 +276,9 @@ async def on_message(message: discord.Message):
             cmd = "open-boxes"
 
         elif "auto summon" in title:
+            # Détection par ID d'émoji (SR/SSR/UR) dans tout l’embed
             found_rarity = None
+
             text_to_scan = [embed.title or "", embed.description or ""]
             if embed.fields:
                 for field in embed.fields:
@@ -191,6 +296,7 @@ async def on_message(message: discord.Message):
                 if found_rarity:
                     break
 
+            # Si une rareté haute est détectée → ping le rôle avec le bon message
             if found_rarity:
                 role = message.guild.get_role(ROLE_ID_E)
                 if role:
