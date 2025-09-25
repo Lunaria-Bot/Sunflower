@@ -11,8 +11,10 @@ REDIS_URL = os.getenv("REDIS_URL")
 # IDs (replace with yours)
 MAZOKU_BOT_ID = 1242388858897956906
 GUILD_ID = 1196690004852883507
-LOG_CHANNEL_ID = 1420095365494866001  # Channel for logs
-ROLE_ID_E = 1420099864548868167       # Rôle à ping
+LOG_CHANNEL_ID = 1420095365494866001   # Channel for logs
+ROLE_ID_E = 1420099864548868167        # Rôle spécial (ping / autosummon)
+ROLE_ID_SUNFLOWER = 1298320344037462177  # Rôle Sunflower
+CONTACT_ID = 801879772421423115          # Contact pour rejoindre
 
 # Emojis rares Mazoku (IDs connus)
 RARITY_EMOTES = {
@@ -47,21 +49,18 @@ intents.members = True
 # Utilitaire safe_send
 # ----------------
 async def safe_send(channel: discord.TextChannel, *args, **kwargs):
-    """Envoie un message en gérant les rate limits (429)."""
+    """Envoie un message en gérant les rate limits (429) avec un simple retry."""
     try:
         return await channel.send(*args, **kwargs)
     except discord.HTTPException as e:
         if getattr(e, "status", None) == 429:
-            print("⚠️ Rate limit atteint, attente 2s avant retry...")
             await asyncio.sleep(2)
             try:
                 return await channel.send(*args, **kwargs)
-            except Exception as e2:
-                print(f"❌ Envoi échoué après retry: {e2}")
-        else:
-            print(f"❌ Erreur HTTP lors de l'envoi: {e}")
-    except Exception as e:
-        print(f"❌ Erreur inattendue lors de l'envoi: {e}")
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 class CooldownBot(discord.Client):
     def __init__(self):
@@ -70,14 +69,13 @@ class CooldownBot(discord.Client):
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
-        print("🔌 Connecting to Redis...")
         try:
             self.redis = await aioredis.from_url(
                 REDIS_URL,
                 decode_responses=True
             )
-            pong = await self.redis.ping()
-            print(f"✅ Redis connected: PING={pong}")
+            await self.redis.ping()
+            print("✅ Redis connected")
         except Exception as e:
             print(f"❌ Redis connection failed: {e}")
             self.redis = None
@@ -110,7 +108,6 @@ async def cooldowns_cmd(interaction: discord.Interaction):
     )
 
     found = False
-
     for cmd in COOLDOWN_SECONDS.keys():
         key = f"cooldown:{user_id}:{cmd}"
         ttl = await client.redis.ttl(key)
@@ -194,6 +191,33 @@ async def toggle_reminder(interaction: discord.Interaction, command: str):
     embed.set_footer(text="You can toggle again anytime with /toggle-reminder")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+
+@client.tree.command(name="flower", description="Get the special flower role if you are part of Sunflower")
+async def flower(interaction: discord.Interaction):
+    guild = interaction.guild
+    member = interaction.user
+    sunflower_role = guild.get_role(ROLE_ID_SUNFLOWER)
+    special_role = guild.get_role(ROLE_ID_E)
+
+    if sunflower_role in member.roles:
+        if special_role not in member.roles:
+            await member.add_roles(special_role)
+            await interaction.response.send_message(
+                f"🌻 {member.mention}, you have received the role **{special_role.name}**!",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"✅ You already have the role **{special_role.name}**.",
+                ephemeral=True
+            )
+    else:
+        await interaction.response.send_message(
+            f"❌ You are not part of Sunflower but you can always join us, "
+            f"contact <@{CONTACT_ID}> to join us !",
+            ephemeral=True
+        )
+
 # ----------------
 # Events
 # ----------------
@@ -213,10 +237,10 @@ async def rotate_status():
     while True:
         try:
             await client.change_presence(status=discord.Status.idle, activity=activities[i % len(activities)])
-        except Exception as e:
-            print(f"⚠️ Failed to change presence: {e}")
+        except Exception:
+            pass
         i += 1
-        await asyncio.sleep(300)  # change every 5 minutes
+        await asyncio.sleep(300)
 
 @client.event
 async def on_message(message: discord.Message):
@@ -234,13 +258,12 @@ async def on_message(message: discord.Message):
     user = None
     cmd = None
 
-    # Case 1: direct slash interaction (if available)
+    # Case 1: direct slash interaction (si disponible)
     if getattr(message, "interaction", None):
         cmd = message.interaction.name
         user = message.interaction.user
-        print(f"🎯 Detected /{cmd} by {user} ({user.id})")
 
-    # Case 2: parse Mazoku embeds
+    # Case 2: parse des embeds Mazoku
     elif message.embeds:
         embed = message.embeds[0]
         title = (embed.title or "").lower()
@@ -264,9 +287,6 @@ async def on_message(message: discord.Message):
                 if match:
                     user = message.guild.get_member(int(match.group(1)))
 
-            if not user:
-                print("⚠️ No user found in Summon Claimed")
-
         elif "pack opened" in title:
             cmd = "open-pack"
 
@@ -274,15 +294,6 @@ async def on_message(message: discord.Message):
             cmd = "open-boxes"
 
         elif "auto summon" in title:
-            # Log complet de l'embed pour debug
-            print("📥 [DEBUG] Autosummon embed reçu :")
-            print(f"Title: {embed.title}")
-            print(f"Description: {embed.description}")
-            for i, field in enumerate(embed.fields):
-                print(f"Field {i} → name: {field.name} | value: {field.value}")
-            if embed.footer and embed.footer.text:
-                print(f"Footer: {embed.footer.text}")
-
             # Détection par ID d'émoji (SR/SSR/UR) dans tout l’embed
             found_rarity = None
 
@@ -297,7 +308,6 @@ async def on_message(message: discord.Message):
             for text in text_to_scan:
                 matches = EMOJI_REGEX.findall(text)
                 for emote_id in matches:
-                    print(f"🔎 Emoji détecté → ID={emote_id}")
                     if emote_id in RARITY_EMOTES:
                         found_rarity = RARITY_EMOTES[emote_id]
                         break
@@ -328,7 +338,6 @@ async def on_message(message: discord.Message):
 
         cd_time = COOLDOWN_SECONDS[cmd]
         await client.redis.setex(key, cd_time, "1")
-        print(f"✅ Cooldown set: {key} TTL={cd_time}")
 
         log_channel = message.guild.get_channel(LOG_CHANNEL_ID)
         if log_channel:
@@ -340,8 +349,6 @@ async def on_message(message: discord.Message):
         async def cooldown_task():
             await asyncio.sleep(cd_time)
             try:
-                print(f"⏰ Cooldown finished for {user} → /{cmd}")  # Debug
-
                 # Check reminder preference
                 reminder_key = f"reminder:{user.id}:{cmd}"
                 reminder_status = await client.redis.get(reminder_key)
@@ -358,14 +365,13 @@ async def on_message(message: discord.Message):
                     end_embed.set_footer(text="MoonQuill is watching over you ✨")
                     await safe_send(message.channel, embed=end_embed)
 
-                # Log end (always)
                 if log_channel:
                     await safe_send(
                         log_channel,
                         f"🕒 Cooldown ended for {user.mention} → `/{cmd}` (reminder={'sent' if reminder_status!='off' else 'skipped'})"
                     )
-            except Exception as e:
-                print(f"⚠️ Cooldown end notification failed: {e}")
+            except Exception:
+                pass
 
         asyncio.create_task(cooldown_task())
 
