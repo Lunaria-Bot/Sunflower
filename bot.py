@@ -85,7 +85,7 @@ class CooldownBot(discord.Client):
 client = CooldownBot()
 
 # ----------------
-# Slash commands
+# Slash command /flower
 # ----------------
 @client.tree.command(name="flower", description="Get the special flower role if you are part of Sunflower")
 async def flower(interaction: discord.Interaction):
@@ -258,4 +258,3 @@ async def on_message(message: discord.Message):
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN is missing from environment variables.")
 client.run(TOKEN)
-``
