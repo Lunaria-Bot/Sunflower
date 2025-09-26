@@ -467,3 +467,4 @@ async def on_message(message: discord.Message):
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN is missing from environment variables.")
 client.run(TOKEN)
+
