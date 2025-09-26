@@ -5,7 +5,7 @@ warnings.filterwarnings(
     "ignore",
     category=DeprecationWarning,
     message=".*interaction is deprecated, use interaction_metadata instead.*"
-
+)
 import discord
 from discord import app_commands
 import asyncio
