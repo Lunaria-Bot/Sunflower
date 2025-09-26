@@ -21,10 +21,13 @@ REDIS_URL = os.getenv("REDIS_URL")
 # IDs
 MAZOKU_BOT_ID = 1242388858897956906
 GUILD_ID = 1196690004852883507
-LOG_CHANNEL_ID = 1420095365494866001   # Channel for logs
-ROLE_ID_E = 1420099864548868167        # Special role (ping / autosummon)
+LOG_CHANNEL_ID = 1420095365494866001
+ROLE_ID_E = 1420099864548868167
 ROLE_ID_SUNFLOWER = 1298320344037462177
 CONTACT_ID = 801879772421423115
+
+# Emoji customisé
+ELAINA_YAY = "<:ElainaYay:1336678776771186753>"
 
 # Rare emojis
 RARITY_EMOTES = {
@@ -34,9 +37,9 @@ RARITY_EMOTES = {
 }
 
 RARITY_MESSAGES = {
-    "UR":  "Eh a Ultra Rare Flower just bloomed  grab it !",
-    "SSR": "Eh a Super Super Rare Flower just bloomed catch it !",
-    "SR":  "Eh a Super Rare Flower just bloomed catch it !"
+    "UR":  f"{ELAINA_YAY} A Ultra Rare Flower just bloomed, grab it!",
+    "SSR": f"{ELAINA_YAY} A Super Super Rare Flower just bloomed, catch it!",
+    "SR":  f"{ELAINA_YAY} A Super Rare Flower just bloomed, catch it!"
 }
 
 EMOJI_REGEX = re.compile(r"<a?:\w+:(\d+)>")
@@ -103,7 +106,7 @@ async def cooldowns_cmd(interaction: discord.Interaction):
 
     user_id = str(interaction.user.id)
     embed = discord.Embed(
-        title="🌻 MoonQuill reminds you:",
+        title=f"{ELAINA_YAY} MoonQuill reminds you:",
         description="Here are your remaining cooldowns before you can play again!",
         color=discord.Color.from_rgb(255, 204, 0)
     )
@@ -122,67 +125,33 @@ async def cooldowns_cmd(interaction: discord.Interaction):
             found = True
 
     if not found:
-        embed.description = "✅ No active cooldowns, enjoy the sunshine ☀️"
+        embed.description = f"✅ No active cooldowns, enjoy the sunshine {ELAINA_YAY}"
         embed.color = discord.Color.green()
 
-    embed.set_footer(text="Like a sunflower, always turn towards the light 🌞")
+    embed.set_footer(text=f"Like {ELAINA_YAY}, always turn towards the light 🌞")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-@client.tree.command(name="force-clear", description="Reset a player's cooldowns (ADMIN only)")
-@app_commands.describe(member="The member whose cooldowns you want to reset",
-                       command="Optional: the command name to reset")
-async def force_clear(interaction: discord.Interaction, member: discord.Member, command: str = None):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You must be an administrator.", ephemeral=True)
-        return
-
-    if not client.redis:
-        await interaction.response.send_message("❌ Redis not connected.", ephemeral=True)
-        return
-
-    user_id = str(member.id)
-    deleted = 0
-    if command:
-        if command not in COOLDOWN_SECONDS:
-            await interaction.response.send_message(f"⚠️ Unknown command: `{command}`", ephemeral=True)
-            return
-        key = f"cooldown:{user_id}:{command}"
-        deleted = await client.redis.delete(key)
-    else:
-        for cmd in COOLDOWN_SECONDS.keys():
-            key = f"cooldown:{user_id}:{cmd}"
-            deleted += await client.redis.delete(key)
-
-    await interaction.response.send_message(
-        f"✅ Cooldowns reset for {member.mention} ({deleted} removed).",
-        ephemeral=True
-    )
-
-
-@client.tree.command(name="toggle-reminder", description="Enable or disable reminders for a specific command")
-@app_commands.describe(command="The command to toggle reminders for")
-async def toggle_reminder(interaction: discord.Interaction, command: str):
+@client.tree.command(name="togglereminder-daily", description="Toggle your daily Mazoku reminder")
+async def toggle_reminder_daily(interaction: discord.Interaction):
     if not client.redis:
         await interaction.response.send_message("❌ Redis not connected!", ephemeral=True)
         return
-    if command not in COOLDOWN_SECONDS:
-        await interaction.response.send_message(f"⚠️ Unknown command: `{command}`", ephemeral=True)
-        return
 
     user_id = str(interaction.user.id)
-    key = f"reminder:{user_id}:{command}"
+    key = f"dailyreminder:{user_id}"
     current = await client.redis.get(key)
-    if current == "off":
-        await client.redis.set(key, "on")
-        status = "✅ Reminders enabled"
-    else:
+
+    if current == "on":
         await client.redis.set(key, "off")
-        status = "❌ Reminders disabled"
+        status = "❌ Daily reminder disabled"
+    else:
+        await client.redis.set(key, "on")
+        status = f"✅ Daily reminder enabled {ELAINA_YAY}"
 
     embed = discord.Embed(
-        title="🔔 Reminder preference updated",
-        description=f"For **/{command}**: {status}",
+        title="🔔 Daily Reminder Preference Updated",
+        description=status,
         color=discord.Color.from_rgb(255, 204, 0)
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -199,7 +168,7 @@ async def flower(interaction: discord.Interaction):
         if special_role not in member.roles:
             await member.add_roles(special_role)
             await interaction.response.send_message(
-                f"🌻 {member.mention}, you have received the role **{special_role.name}**!",
+                f"{ELAINA_YAY} {member.mention}, you have received the role **{special_role.name}**!",
                 ephemeral=True
             )
         else:
@@ -215,46 +184,18 @@ async def flower(interaction: discord.Interaction):
         )
 
 # ----------------
-# New Daily Reminder Command
-# ----------------
-@client.tree.command(name="togglereminder-daily", description="Toggle your daily Mazoku reminder")
-async def toggle_reminder_daily(interaction: discord.Interaction):
-    if not client.redis:
-        await interaction.response.send_message("❌ Redis not connected!", ephemeral=True)
-        return
-
-    user_id = str(interaction.user.id)
-    key = f"dailyreminder:{user_id}"
-    current = await client.redis.get(key)
-
-    # Default is off if no key
-    if current == "on":
-        await client.redis.set(key, "off")
-        status = "❌ Daily reminder disabled"
-    else:
-        await client.redis.set(key, "on")
-        status = "✅ Daily reminder enabled"
-
-    embed = discord.Embed(
-        title="🔔 Daily Reminder Preference Updated",
-        description=status,
-        color=discord.Color.from_rgb(255, 204, 0)
-    )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-# ----------------
 # Events
 # ----------------
 @client.event
 async def on_ready():
     print(f"✅ Logged in as {client.user} ({client.user.id})")
     client.loop.create_task(rotate_status())
-    client.loop.create_task(daily_reminder_task())  # seule la vraie tâche quotidienne
+    client.loop.create_task(daily_reminder_task())
 
 async def rotate_status():
     activities = [
         discord.Game("MoonQuill is sleeping 😴"),
-        discord.Activity(type=discord.ActivityType.watching, name="the sunflowers 🌻"),
+        discord.Activity(type=discord.ActivityType.watching, name=f"the sunflowers {ELAINA_YAY}"),
         discord.Activity(type=discord.ActivityType.listening, name="the wind in the fields 🌬️"),
         discord.Activity(type=discord.ActivityType.competing, name="a sunflower growing contest 🌞")
     ]
@@ -267,10 +208,10 @@ async def rotate_status():
         i += 1
         await asyncio.sleep(300)
 
-# Daily reminder task at the fixed <t:1758844801:T> time every day
+# Daily reminder task
 async def daily_reminder_task():
     await client.wait_until_ready()
-    target_time = datetime.datetime.utcfromtimestamp(1758844801).time()  # fixed daily time (UTC)
+    target_time = datetime.datetime.utcfromtimestamp(1758844801).time()
 
     while not client.is_closed():
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -286,7 +227,6 @@ async def daily_reminder_task():
         wait_seconds = (today_target - now).total_seconds()
         await asyncio.sleep(wait_seconds)
 
-        # Send reminders to all opted-in users (stored in Redis)
         try:
             keys = await client.redis.keys("dailyreminder:*")
         except Exception:
@@ -303,13 +243,11 @@ async def daily_reminder_task():
                 if not user:
                     continue
 
-                # Send DM
                 try:
-                    await user.send("🌻 Your Mazoku daily is ready!")
+                    await user.send(f"{ELAINA_YAY} Your Mazoku daily is ready!")
                 except Exception:
                     continue
 
-                # Styled log embed in the log channel
                 log_channel = client.get_channel(LOG_CHANNEL_ID)
                 if log_channel:
                     embed = discord.Embed(
@@ -323,147 +261,10 @@ async def daily_reminder_task():
             except Exception:
                 continue
 
-@client.event
-async def on_message(message: discord.Message):
-    if not client.redis:
-        return
-    if message.author.id == client.user.id:
-        return
-    if message.guild and message.guild.id != GUILD_ID:
-        return
-    if not (message.author.bot and message.author.id == MAZOKU_BOT_ID):
-        return
-
-    user = None
-    cmd = None
-
-    # If the message comes from an interaction
-    if getattr(message, "interaction", None):
-        cmd = message.interaction.name
-        user = message.interaction.user
-
-    # Otherwise parse Mazoku embeds
-    elif message.embeds:
-        embed = message.embeds[0]
-        title = (embed.title or "").lower()
-        desc = embed.description or ""
-
-        if "summon claimed" in title:
-            cmd = "summon"
-            match = re.search(r"Claimed By\s+<@!?(\d+)>", desc)
-            if match:
-                user = message.guild.get_member(int(match.group(1)))
-            if not user and embed.fields:
-                for field in embed.fields:
-                    match = re.search(r"Claimed By\s+<@!?(\d+)>", field.value)
-                    if match:
-                        user = message.guild.get_member(int(match.group(1)))
-                        break
-            if not user and embed.footer and embed.footer.text:
-                match = re.search(r"Claimed By\s+<@!?(\d+)>", embed.footer.text)
-                if match:
-                    user = message.guild.get_member(int(match.group(1)))
-
-        elif "pack opened" in title:
-            cmd = "open-pack"
-
-        elif "box opened" in title:
-            cmd = "open-boxes"
-
-        elif "auto summon" in title:
-            # Detect rarity (SR/SSR/UR) via emoji IDs across the embed
-            found_rarity = None
-            text_to_scan = [embed.title or "", embed.description or ""]
-            if embed.fields:
-                for field in embed.fields:
-                    text_to_scan.append(field.name or "")
-                    text_to_scan.append(field.value or "")
-            if embed.footer and embed.footer.text:
-                text_to_scan.append(embed.footer.text)
-
-            for text in text_to_scan:
-                matches = EMOJI_REGEX.findall(text)
-                for emote_id in matches:
-                    if emote_id in RARITY_EMOTES:
-                        found_rarity = RARITY_EMOTES[emote_id]
-                        break
-                if found_rarity:
-                    break
-
-            if found_rarity:
-                role = message.guild.get_role(ROLE_ID_E)
-                if role:
-                    msg = RARITY_MESSAGES.get(found_rarity, "A special card just spawned!")
-                    embed_msg = discord.Embed(description=msg, color=discord.Color.gold())
-                    await safe_send(message.channel, content=f"{role.mention}", embed=embed_msg)
-
-    # ----------------
-    # Apply cooldowns
-    # ----------------
-    if user and cmd in COOLDOWN_SECONDS:
-        user_id = str(user.id)
-        key = f"cooldown:{user_id}:{cmd}"
-
-        ttl = await client.redis.ttl(key)
-        if ttl > 0:
-            await safe_send(
-                message.channel,
-                content=f"{user.mention}",
-                embed=discord.Embed(description=f"⏳ You are still on cooldown for `/{cmd}` ({ttl}s left)!")
-            )
-            return
-
-        cd_time = COOLDOWN_SECONDS[cmd]
-        await client.redis.setex(key, cd_time, "1")
-
-        log_channel = message.guild.get_channel(LOG_CHANNEL_ID)
-        if log_channel:
-            await safe_send(
-                log_channel,
-                embed=discord.Embed(
-                    title="📌 Cooldown started",
-                    description=f"For {user.mention} → `/{cmd}` ({cd_time}s)",
-                    color=discord.Color.blue(),
-                    timestamp=datetime.datetime.now(datetime.timezone.utc)
-                )
-            )
-
-        async def cooldown_task():
-            await asyncio.sleep(cd_time)
-            try:
-                reminder_key = f"reminder:{user.id}:{cmd}"
-                reminder_status = await client.redis.get(reminder_key)
-
-                if reminder_status != "off":
-                    end_embed = discord.Embed(
-                        title="🌞 Cooldown finished!",
-                        description=(
-                            f"Your **/{cmd}** is available again.\n\n"
-                            "Like a sunflower, enjoy this new light 🌻"
-                        ),
-                        color=discord.Color.from_rgb(255, 204, 0)
-                    )
-                    end_embed.set_footer(text="MoonQuill is watching over you ✨")
-                    await safe_send(message.channel, content=f"{user.mention}", embed=end_embed)
-
-                if log_channel:
-                    await safe_send(
-                        log_channel,
-                        embed=discord.Embed(
-                            title="🕒 Cooldown ended",
-                            description=f"For {user.mention} → `/{cmd}` (reminder={'sent' if reminder_status!='off' else 'skipped'})",
-                            color=discord.Color.blue(),
-                            timestamp=datetime.datetime.now(datetime.timezone.utc)
-                        )
-                    )
-            except Exception:
-                pass
-
-        asyncio.create_task(cooldown_task())
-
 # ----------------
 # Entry point
 # ----------------
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN is missing from environment variables.")
 client.run(TOKEN)
+``
