@@ -249,8 +249,7 @@ async def toggle_reminder_daily(interaction: discord.Interaction):
 async def on_ready():
     print(f"✅ Logged in as {client.user} ({client.user.id})")
     client.loop.create_task(rotate_status())
-    client.loop.create_task(daily_reminder_task())      # vraie tâche quotidienne
-    client.loop.create_task(test_daily_reminder_task()) # tâche de test (1 minute)
+    client.loop.create_task(daily_reminder_task())  # seule la vraie tâche quotidienne
 
 async def rotate_status():
     activities = [
@@ -323,33 +322,6 @@ async def daily_reminder_task():
                     await safe_send(log_channel, embed=embed)
             except Exception:
                 continue
-
-# Test task: sends a reminder 1 minute after startup
-async def test_daily_reminder_task():
-    await client.wait_until_ready()
-    await asyncio.sleep(60)  # wait 1 minute
-
-    keys = await client.redis.keys("dailyreminder:*")
-    for key in keys:
-        val = await client.redis.get(key)
-        if val == "on":
-            user_id = int(key.split(":")[1])
-            user = client.get_user(user_id)
-            if user:
-                try:
-                    await user.send("🌻 [TEST] Your Mazoku daily is ready!")
-                    log_channel = client.get_channel(LOG_CHANNEL_ID)
-                    if log_channel:
-                        embed = discord.Embed(
-                            title="📩 [TEST] Daily reminder sent",
-                            description=f"Sent to {user.mention} (ID: `{user.id}`)",
-                            color=discord.Color.green(),
-                            timestamp=datetime.datetime.now(datetime.timezone.utc)
-                        )
-                        embed.set_footer(text="MoonQuill daily scheduler (TEST)")
-                        await safe_send(log_channel, embed=embed)
-                except Exception:
-                    pass
 
 @client.event
 async def on_message(message: discord.Message):
@@ -495,4 +467,3 @@ async def on_message(message: discord.Message):
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN is missing from environment variables.")
 client.run(TOKEN)
-
