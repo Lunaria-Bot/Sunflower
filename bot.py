@@ -182,7 +182,6 @@ async def flower(interaction: discord.Interaction):
             f"contact <@{CONTACT_ID}> to join us !",
             ephemeral=True
         )
-
 # ----------------
 # Events
 # ----------------
@@ -261,10 +260,147 @@ async def daily_reminder_task():
             except Exception:
                 continue
 
+@client.event
+async def on_message(message: discord.Message):
+    if not client.redis:
+        return
+    if message.author.id == client.user.id:
+        return
+    if message.guild and message.guild.id != GUILD_ID:
+        return
+    if not (message.author.bot and message.author.id == MAZOKU_BOT_ID):
+        return
+
+    user = None
+    cmd = None
+
+    # ✅ Correctif : utiliser interaction_metadata au lieu de interaction
+    if getattr(message, "interaction_metadata", None):
+        cmd = message.interaction_metadata.name
+        user = message.author
+
+    # Sinon, on parse les embeds Mazoku
+    elif message.embeds:
+        embed = message.embeds[0]
+        title = (embed.title or "").lower()
+        desc = embed.description or ""
+
+        if "summon claimed" in title:
+            cmd = "summon"
+            match = re.search(r"Claimed By\s+<@!?(\d+)>", desc)
+            if match:
+                user = message.guild.get_member(int(match.group(1)))
+            if not user and embed.fields:
+                for field in embed.fields:
+                    match = re.search(r"Claimed By\s+<@!?(\d+)>", field.value)
+                    if match:
+                        user = message.guild.get_member(int(match.group(1)))
+                        break
+            if not user and embed.footer and embed.footer.text:
+                match = re.search(r"Claimed By\s+<@!?(\d+)>", embed.footer.text)
+                if match:
+                    user = message.guild.get_member(int(match.group(1)))
+
+        elif "pack opened" in title:
+            cmd = "open-pack"
+
+        elif "box opened" in title:
+            cmd = "open-boxes"
+
+        elif "auto summon" in title:
+            found_rarity = None
+            text_to_scan = [embed.title or "", embed.description or ""]
+            if embed.fields:
+                for field in embed.fields:
+                    text_to_scan.append(field.name or "")
+                    text_to_scan.append(field.value or "")
+            if embed.footer and embed.footer.text:
+                text_to_scan.append(embed.footer.text)
+
+            for text in text_to_scan:
+                matches = EMOJI_REGEX.findall(text)
+                for emote_id in matches:
+                    if emote_id in RARITY_EMOTES:
+                        found_rarity = RARITY_EMOTES[emote_id]
+                        break
+                if found_rarity:
+                    break
+
+            if found_rarity:
+                role = message.guild.get_role(ROLE_ID_E)
+                if role:
+                    msg = RARITY_MESSAGES.get(found_rarity, "A special card just spawned!")
+                    embed_msg = discord.Embed(description=msg, color=discord.Color.gold())
+                    await safe_send(message.channel, content=f"{role.mention}", embed=embed_msg)
+
+    # ----------------
+    # Apply cooldowns
+    # ----------------
+    if user and cmd in COOLDOWN_SECONDS:
+        user_id = str(user.id)
+        key = f"cooldown:{user_id}:{cmd}"
+
+        ttl = await client.redis.ttl(key)
+        if ttl > 0:
+            await safe_send(
+                message.channel,
+                content=f"{user.mention}",
+                embed=discord.Embed(description=f"⏳ You are still on cooldown for `/{cmd}` ({ttl}s left)!")
+            )
+            return
+
+        cd_time = COOLDOWN_SECONDS[cmd]
+        await client.redis.setex(key, cd_time, "1")
+
+        log_channel = message.guild.get_channel(LOG_CHANNEL_ID)
+        if log_channel:
+            await safe_send(
+                log_channel,
+                embed=discord.Embed(
+                    title="📌 Cooldown started",
+                    description=f"For {user.mention} → `/{cmd}` ({cd_time}s)",
+                    color=discord.Color.blue(),
+                    timestamp=datetime.datetime.now(datetime.timezone.utc)
+                )
+            )
+
+        async def cooldown_task():
+            await asyncio.sleep(cd_time)
+            try:
+                reminder_key = f"reminder:{user.id}:{cmd}"
+                reminder_status = await client.redis.get(reminder_key)
+
+                if reminder_status != "off":
+                    end_embed = discord.Embed(
+                        title="🌞 Cooldown finished!",
+                        description=(
+                            f"Your **/{cmd}** is available again!\n\n"
+                            f"{ELAINA_YAY} Enjoy this new light\n"
+                            "✨ MoonQuill is watching over you"
+                        ),
+                        color=discord.Color.from_rgb(255, 204, 0)
+                    )
+                    end_embed.set_footer(text="MoonQuill is watching over you ✨")
+                    await safe_send(message.channel, content=f"{user.mention}", embed=end_embed)
+
+                if log_channel:
+                    await safe_send(
+                        log_channel,
+                        embed=discord.Embed(
+                            title="🕒 Cooldown ended",
+                            description=f"For {user.mention} → `/{cmd}` (reminder={'sent' if reminder_status!='off' else 'skipped'})",
+                            color=discord.Color.blue(),
+                            timestamp=datetime.datetime.now(datetime.timezone.utc)
+                        )
+                    )
+            except Exception:
+                pass
+
+        asyncio.create_task(cooldown_task())
+
 # ----------------
 # Entry point
 # ----------------
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN is missing from environment variables.")
 client.run(TOKEN)
-``
