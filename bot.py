@@ -1,9 +1,18 @@
+import warnings
+
+# Ignore spammy DeprecationWarnings from discord.py
+warnings.filterwarnings(
+    "ignore",
+    category=DeprecationWarning,
+    message=".*interaction is deprecated, use interaction_metadata instead.*"
+
 import discord
 from discord import app_commands
 import asyncio
 import os
 import re
 import redis.asyncio as aioredis
+import datetime
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL")
