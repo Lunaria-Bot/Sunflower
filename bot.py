@@ -21,13 +21,10 @@ REDIS_URL = os.getenv("REDIS_URL")
 # IDs
 MAZOKU_BOT_ID = 1242388858897956906
 GUILD_ID = 1196690004852883507
-LOG_CHANNEL_ID = 1420095365494866001
-ROLE_ID_E = 1420099864548868167
+LOG_CHANNEL_ID = 1420095365494866001   # Channel for logs
+ROLE_ID_E = 1420099864548868167        # Special role (ping / autosummon)
 ROLE_ID_SUNFLOWER = 1298320344037462177
 CONTACT_ID = 801879772421423115
-
-# Emoji customisé
-ELAINA_YAY = "<:ElainaYay:1336678776771186753>"
 
 # Rare emojis
 RARITY_EMOTES = {
@@ -37,9 +34,9 @@ RARITY_EMOTES = {
 }
 
 RARITY_MESSAGES = {
-    "UR":  f"{ELAINA_YAY} A Ultra Rare Flower just bloomed, grab it!",
-    "SSR": f"{ELAINA_YAY} A Super Super Rare Flower just bloomed, catch it!",
-    "SR":  f"{ELAINA_YAY} A Super Rare Flower just bloomed, catch it!"
+    "UR":  "Eh a Ultra Rare Flower just bloomed  grab it !",
+    "SSR": "Eh a Super Super Rare Flower just bloomed catch it !",
+    "SR":  "Eh a Super Rare Flower just bloomed catch it !"
 }
 
 EMOJI_REGEX = re.compile(r"<a?:\w+:(\d+)>")
@@ -106,7 +103,7 @@ async def cooldowns_cmd(interaction: discord.Interaction):
 
     user_id = str(interaction.user.id)
     embed = discord.Embed(
-        title=f"{ELAINA_YAY} MoonQuill reminds you:",
+        title="🌻 MoonQuill reminds you:",
         description="Here are your remaining cooldowns before you can play again!",
         color=discord.Color.from_rgb(255, 204, 0)
     )
@@ -125,33 +122,67 @@ async def cooldowns_cmd(interaction: discord.Interaction):
             found = True
 
     if not found:
-        embed.description = f"✅ No active cooldowns, enjoy the sunshine {ELAINA_YAY}"
+        embed.description = "✅ No active cooldowns, enjoy the sunshine ☀️"
         embed.color = discord.Color.green()
 
-    embed.set_footer(text=f"Like {ELAINA_YAY}, always turn towards the light 🌞")
+    embed.set_footer(text="Like a sunflower, always turn towards the light 🌞")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-@client.tree.command(name="togglereminder-daily", description="Toggle your daily Mazoku reminder")
-async def toggle_reminder_daily(interaction: discord.Interaction):
+@client.tree.command(name="force-clear", description="Reset a player's cooldowns (ADMIN only)")
+@app_commands.describe(member="The member whose cooldowns you want to reset",
+                       command="Optional: the command name to reset")
+async def force_clear(interaction: discord.Interaction, member: discord.Member, command: str = None):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You must be an administrator.", ephemeral=True)
+        return
+
+    if not client.redis:
+        await interaction.response.send_message("❌ Redis not connected.", ephemeral=True)
+        return
+
+    user_id = str(member.id)
+    deleted = 0
+    if command:
+        if command not in COOLDOWN_SECONDS:
+            await interaction.response.send_message(f"⚠️ Unknown command: `{command}`", ephemeral=True)
+            return
+        key = f"cooldown:{user_id}:{command}"
+        deleted = await client.redis.delete(key)
+    else:
+        for cmd in COOLDOWN_SECONDS.keys():
+            key = f"cooldown:{user_id}:{cmd}"
+            deleted += await client.redis.delete(key)
+
+    await interaction.response.send_message(
+        f"✅ Cooldowns reset for {member.mention} ({deleted} removed).",
+        ephemeral=True
+    )
+
+
+@client.tree.command(name="toggle-reminder", description="Enable or disable reminders for a specific command")
+@app_commands.describe(command="The command to toggle reminders for")
+async def toggle_reminder(interaction: discord.Interaction, command: str):
     if not client.redis:
         await interaction.response.send_message("❌ Redis not connected!", ephemeral=True)
         return
+    if command not in COOLDOWN_SECONDS:
+        await interaction.response.send_message(f"⚠️ Unknown command: `{command}`", ephemeral=True)
+        return
 
     user_id = str(interaction.user.id)
-    key = f"dailyreminder:{user_id}"
+    key = f"reminder:{user_id}:{command}"
     current = await client.redis.get(key)
-
-    if current == "on":
-        await client.redis.set(key, "off")
-        status = "❌ Daily reminder disabled"
-    else:
+    if current == "off":
         await client.redis.set(key, "on")
-        status = f"✅ Daily reminder enabled {ELAINA_YAY}"
+        status = "✅ Reminders enabled"
+    else:
+        await client.redis.set(key, "off")
+        status = "❌ Reminders disabled"
 
     embed = discord.Embed(
-        title="🔔 Daily Reminder Preference Updated",
-        description=status,
+        title="🔔 Reminder preference updated",
+        description=f"For **/{command}**: {status}",
         color=discord.Color.from_rgb(255, 204, 0)
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -168,7 +199,7 @@ async def flower(interaction: discord.Interaction):
         if special_role not in member.roles:
             await member.add_roles(special_role)
             await interaction.response.send_message(
-                f"{ELAINA_YAY} {member.mention}, you have received the role **{special_role.name}**!",
+                f"🌻 {member.mention}, you have received the role **{special_role.name}**!",
                 ephemeral=True
             )
         else:
@@ -182,6 +213,35 @@ async def flower(interaction: discord.Interaction):
             f"contact <@{CONTACT_ID}> to join us !",
             ephemeral=True
         )
+
+# ----------------
+# New Daily Reminder Command
+# ----------------
+@client.tree.command(name="togglereminder-daily", description="Toggle your daily Mazoku reminder")
+async def toggle_reminder_daily(interaction: discord.Interaction):
+    if not client.redis:
+        await interaction.response.send_message("❌ Redis not connected!", ephemeral=True)
+        return
+
+    user_id = str(interaction.user.id)
+    key = f"dailyreminder:{user_id}"
+    current = await client.redis.get(key)
+
+    # Default is off if no key
+    if current == "on":
+        await client.redis.set(key, "off")
+        status = "❌ Daily reminder disabled"
+    else:
+        await client.redis.set(key, "on")
+        status = "✅ Daily reminder enabled"
+
+    embed = discord.Embed(
+        title="🔔 Daily Reminder Preference Updated",
+        description=status,
+        color=discord.Color.from_rgb(255, 204, 0)
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 # ----------------
 # Events
 # ----------------
@@ -189,12 +249,12 @@ async def flower(interaction: discord.Interaction):
 async def on_ready():
     print(f"✅ Logged in as {client.user} ({client.user.id})")
     client.loop.create_task(rotate_status())
-    client.loop.create_task(daily_reminder_task())
+    client.loop.create_task(daily_reminder_task())  # seule la vraie tâche quotidienne
 
 async def rotate_status():
     activities = [
         discord.Game("MoonQuill is sleeping 😴"),
-        discord.Activity(type=discord.ActivityType.watching, name=f"the sunflowers {ELAINA_YAY}"),
+        discord.Activity(type=discord.ActivityType.watching, name="the sunflowers 🌻"),
         discord.Activity(type=discord.ActivityType.listening, name="the wind in the fields 🌬️"),
         discord.Activity(type=discord.ActivityType.competing, name="a sunflower growing contest 🌞")
     ]
@@ -207,10 +267,10 @@ async def rotate_status():
         i += 1
         await asyncio.sleep(300)
 
-# Daily reminder task
+# Daily reminder task at the fixed <t:1758844801:T> time every day
 async def daily_reminder_task():
     await client.wait_until_ready()
-    target_time = datetime.datetime.utcfromtimestamp(1758844801).time()
+    target_time = datetime.datetime.utcfromtimestamp(1758844801).time()  # fixed daily time (UTC)
 
     while not client.is_closed():
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -226,6 +286,7 @@ async def daily_reminder_task():
         wait_seconds = (today_target - now).total_seconds()
         await asyncio.sleep(wait_seconds)
 
+        # Send reminders to all opted-in users (stored in Redis)
         try:
             keys = await client.redis.keys("dailyreminder:*")
         except Exception:
@@ -242,11 +303,13 @@ async def daily_reminder_task():
                 if not user:
                     continue
 
+                # Send DM
                 try:
-                    await user.send(f"{ELAINA_YAY} Your Mazoku daily is ready!")
+                    await user.send("🌻 Your Mazoku daily is ready!")
                 except Exception:
                     continue
 
+                # Styled log embed in the log channel
                 log_channel = client.get_channel(LOG_CHANNEL_ID)
                 if log_channel:
                     embed = discord.Embed(
@@ -274,12 +337,12 @@ async def on_message(message: discord.Message):
     user = None
     cmd = None
 
-    # ✅ Correctif : utiliser interaction_metadata au lieu de interaction
-    if getattr(message, "interaction_metadata", None):
-        cmd = message.interaction_metadata.name
-        user = message.author
+    # If the message comes from an interaction
+    if getattr(message, "interaction", None):
+        cmd = message.interaction.name
+        user = message.interaction.user
 
-    # Sinon, on parse les embeds Mazoku
+    # Otherwise parse Mazoku embeds
     elif message.embeds:
         embed = message.embeds[0]
         title = (embed.title or "").lower()
@@ -308,6 +371,7 @@ async def on_message(message: discord.Message):
             cmd = "open-boxes"
 
         elif "auto summon" in title:
+            # Detect rarity (SR/SSR/UR) via emoji IDs across the embed
             found_rarity = None
             text_to_scan = [embed.title or "", embed.description or ""]
             if embed.fields:
@@ -374,9 +438,8 @@ async def on_message(message: discord.Message):
                     end_embed = discord.Embed(
                         title="🌞 Cooldown finished!",
                         description=(
-                            f"Your **/{cmd}** is available again!\n\n"
-                            f"{ELAINA_YAY} Enjoy this new light\n"
-                            "✨ MoonQuill is watching over you"
+                            f"Your **/{cmd}** is available again.\n\n"
+                            "Like a sunflower, enjoy this new light 🌻"
                         ),
                         color=discord.Color.from_rgb(255, 204, 0)
                     )
