@@ -1,12 +1,4 @@
 import warnings
-
-# Ignore spammy DeprecationWarnings from discord.py
-warnings.filterwarnings(
-    "ignore",
-    category=DeprecationWarning,
-    message=".*interaction is deprecated, use interaction_metadata instead.*"
-)
-
 import discord
 from discord import app_commands
 import asyncio
@@ -15,10 +7,25 @@ import re
 import redis.asyncio as aioredis
 import datetime
 
+# ----------------
+# Warnings
+# ----------------
+# Ignore spammy DeprecationWarnings from discord.py
+warnings.filterwarnings(
+    "ignore",
+    category=DeprecationWarning,
+    message=".*interaction is deprecated, use interaction_metadata instead.*"
+)
+
+# ----------------
+# Tokens & Config
+# ----------------
 TOKEN = os.getenv("DISCORD_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL")
 
+# ----------------
 # IDs
+# ----------------
 MAZOKU_BOT_ID = 1242388858897956906
 GUILD_ID = 1196690004852883507
 LOG_CHANNEL_ID = 1420095365494866001   # Channel for logs
@@ -26,7 +33,9 @@ ROLE_ID_E = 1420099864548868167        # Special role (ping / autosummon)
 ROLE_ID_SUNFLOWER = 1298320344037462177
 CONTACT_ID = 801879772421423115
 
-# Rare emojis
+# ----------------
+# Rare Emojis
+# ----------------
 RARITY_EMOTES = {
     "1342202597389373530": "SR",
     "1342202212948115510": "SSR",
@@ -34,20 +43,25 @@ RARITY_EMOTES = {
 }
 
 RARITY_MESSAGES = {
-    "UR":  "Eh a Ultra Rare Flower just bloomed  grab it !",
+    "UR":  "Eh a Ultra Rare Flower just bloomed grab it !",
     "SSR": "Eh a Super Super Rare Flower just bloomed catch it !",
     "SR":  "Eh a Super Rare Flower just bloomed catch it !"
 }
 
 EMOJI_REGEX = re.compile(r"<a?:\w+:(\d+)>")
 
+# ----------------
+# Cooldowns
+# ----------------
 COOLDOWN_SECONDS = {
-    "summon": 1800, # 30 min
-    "open-boxes": 60, # 1 min
-    "open-pack": 60, # 1min
-    "vote": 43200   # 12h
+    "summon": 1800,
+    "open-boxes": 60,
+    "open-pack": 60
 }
 
+# ----------------
+# Intents
+# ----------------
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
@@ -69,6 +83,9 @@ async def safe_send(channel: discord.TextChannel, *args, **kwargs):
     except Exception:
         pass
 
+# ----------------
+# Bot Class
+# ----------------
 class CooldownBot(discord.Client):
     def __init__(self):
         super().__init__(intents=intents)
@@ -94,7 +111,7 @@ class CooldownBot(discord.Client):
 client = CooldownBot()
 
 # ----------------
-# Slash commands
+# Slash Commands
 # ----------------
 @client.tree.command(name="cooldowns", description="Check your active cooldowns")
 async def cooldowns_cmd(interaction: discord.Interaction):
@@ -215,6 +232,7 @@ async def flower(interaction: discord.Interaction):
             ephemeral=True
         )
 
+
 # ----------------
 # New Daily Reminder Command
 # ----------------
@@ -242,7 +260,6 @@ async def toggle_reminder_daily(interaction: discord.Interaction):
         color=discord.Color.from_rgb(255, 204, 0)
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 # ----------------
 # Events
 # ----------------
@@ -252,6 +269,10 @@ async def on_ready():
     client.loop.create_task(rotate_status())
     client.loop.create_task(daily_reminder_task())  # seule la vraie tâche quotidienne
 
+
+# ----------------
+# Status Rotation
+# ----------------
 async def rotate_status():
     activities = [
         discord.Game("MoonQuill is sleeping 😴"),
@@ -262,13 +283,19 @@ async def rotate_status():
     i = 0
     while True:
         try:
-            await client.change_presence(status=discord.Status.idle, activity=activities[i % len(activities)])
+            await client.change_presence(
+                status=discord.Status.idle,
+                activity=activities[i % len(activities)]
+            )
         except Exception:
             pass
         i += 1
         await asyncio.sleep(300)
 
-# Daily reminder task at the fixed <t:1758844801:T> time every day
+
+# ----------------
+# Daily Reminder Task
+# ----------------
 async def daily_reminder_task():
     await client.wait_until_ready()
     target_time = datetime.datetime.utcfromtimestamp(1758844801).time()  # fixed daily time (UTC)
@@ -324,6 +351,10 @@ async def daily_reminder_task():
             except Exception:
                 continue
 
+
+# ----------------
+# Message Event
+# ----------------
 @client.event
 async def on_message(message: discord.Message):
     if not client.redis:
@@ -338,12 +369,12 @@ async def on_message(message: discord.Message):
     user = None
     cmd = None
 
-    # ✅ Interaction metadata (pas de .name dispo)
-    if getattr(message, "interaction_metadata", None):
-        user = message.author
-        # cmd reste None, on s'appuie sur les embeds pour détecter
+    # ⚠️ Interaction metadata (ancienne version utilisait message.interaction)
+    if getattr(message, "interaction", None):
+        cmd = message.interaction.name
+        user = message.interaction.user
 
-    # Sinon, on parse les embeds Mazoku
+    # Otherwise parse Mazoku embeds
     elif message.embeds:
         embed = message.embeds[0]
         title = (embed.title or "").lower()
@@ -367,18 +398,12 @@ async def on_message(message: discord.Message):
 
         elif "pack opened" in title:
             cmd = "open-pack"
-            user = message.author
 
         elif "box opened" in title:
             cmd = "open-boxes"
-            user = message.author
-
-        elif "vote mazoku" in title:
-            cmd = "vote"
-            user = message.author
 
         elif "auto summon" in title:
-            # Détection de rareté
+            # Detect rarity (SR/SSR/UR) via emoji IDs across the embed
             found_rarity = None
             text_to_scan = [embed.title or "", embed.description or ""]
             if embed.fields:
@@ -442,44 +467,31 @@ async def on_message(message: discord.Message):
                 reminder_status = await client.redis.get(reminder_key)
 
                 if reminder_status != "off":
-                    if cmd == "vote":
-                        end_embed = discord.Embed(
-                            title="🗳️ Vote reminder!",
-                            description=(
-                                f"Your **/{cmd}** cooldown is over.\n\n"
-                                f"{ELAINA_YAY} You can support Mazoku again on top.gg!"
-                            ),
-                            color=discord.Color.from_rgb(255, 204, 0)
-                        )
-                    else:
-                        end_embed = discord.Embed(
-                            title="🌞 Cooldown finished!",
-                            description=(
-                                f"Your **/{cmd}** is available again.\n\n"
-                                f"{ELAINA_YAY} Enjoy this new light\n"
-                                "✨ MoonQuill is watching over you"
-                            ),
-                            color=discord.Color.from_rgb(255, 204, 0)
-                        )
-                        end_embed.set_footer(text="MoonQuill is watching over you ✨")
-
+                    end_embed = discord.Embed(
+                        title="🌞 Cooldown finished!",
+                        description=(
+                            f"Your **/{cmd}** is available again.\n\n"
+                            "Like a sunflower, enjoy this new light 🌻"
+                        ),
+                        color=discord.Color.from_rgb(255, 204, 0)
+                    )
+                    end_embed.set_footer(text="MoonQuill is watching over you ✨")
                     await safe_send(message.channel, content=f"{user.mention}", embed=end_embed)
 
-                    # ✅ Log dans le channel de log
-                    if log_channel:
-                        log_embed = discord.Embed(
-                            title="📩 Reminder sent",
-                            description=f"Reminder for `{cmd}` sent to {user.mention} (ID: `{user.id}`)",
-                            color=discord.Color.green(),
+                if log_channel:
+                    await safe_send(
+                        log_channel,
+                        embed=discord.Embed(
+                            title="🕒 Cooldown ended",
+                            description=f"For {user.mention} → `/{cmd}` (reminder={'sent' if reminder_status!='off' else 'skipped'})",
+                            color=discord.Color.blue(),
                             timestamp=datetime.datetime.now(datetime.timezone.utc)
                         )
-                        await safe_send(log_channel, embed=log_embed)
-
+                    )
             except Exception:
                 pass
 
         asyncio.create_task(cooldown_task())
-
 
 
 # ----------------
@@ -487,5 +499,5 @@ async def on_message(message: discord.Message):
 # ----------------
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN is missing from environment variables.")
-client.run(TOKEN)
 
+client.run(TOKEN)
