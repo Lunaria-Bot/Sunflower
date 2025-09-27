@@ -338,10 +338,10 @@ async def on_message(message: discord.Message):
     user = None
     cmd = None
 
-    # ✅ Utiliser interaction_metadata au lieu de interaction
+    # ✅ Interaction metadata (pas de .name dispo)
     if getattr(message, "interaction_metadata", None):
-        cmd = message.interaction_metadata.name
         user = message.author
+        # cmd reste None, on s'appuie sur les embeds pour détecter
 
     # Sinon, on parse les embeds Mazoku
     elif message.embeds:
@@ -367,9 +367,11 @@ async def on_message(message: discord.Message):
 
         elif "pack opened" in title:
             cmd = "open-pack"
+            user = message.author
 
         elif "box opened" in title:
             cmd = "open-boxes"
+            user = message.author
 
         elif "vote mazoku" in title:
             cmd = "vote"
@@ -477,6 +479,7 @@ async def on_message(message: discord.Message):
                 pass
 
         asyncio.create_task(cooldown_task())
+
 
 
 # ----------------
