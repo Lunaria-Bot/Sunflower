@@ -337,12 +337,12 @@ async def on_message(message: discord.Message):
     user = None
     cmd = None
 
-    # If the message comes from an interaction
-    if getattr(message, "interaction", None):
-        cmd = message.interaction.name
-        user = message.interaction.user
+    # ✅ Utiliser interaction_metadata au lieu de interaction
+    if getattr(message, "interaction_metadata", None):
+        cmd = message.interaction_metadata.name
+        user = message.author
 
-    # Otherwise parse Mazoku embeds
+    # Sinon, on parse les embeds Mazoku
     elif message.embeds:
         embed = message.embeds[0]
         title = (embed.title or "").lower()
@@ -370,8 +370,12 @@ async def on_message(message: discord.Message):
         elif "box opened" in title:
             cmd = "open-boxes"
 
+        elif "vote mazoku" in title:
+            cmd = "vote"
+            user = message.author
+
         elif "auto summon" in title:
-            # Detect rarity (SR/SSR/UR) via emoji IDs across the embed
+            # Détection de rareté
             found_rarity = None
             text_to_scan = [embed.title or "", embed.description or ""]
             if embed.fields:
@@ -435,31 +439,44 @@ async def on_message(message: discord.Message):
                 reminder_status = await client.redis.get(reminder_key)
 
                 if reminder_status != "off":
-                    end_embed = discord.Embed(
-                        title="🌞 Cooldown finished!",
-                        description=(
-                            f"Your **/{cmd}** is available again.\n\n"
-                            "Like a sunflower, enjoy this new light 🌻"
-                        ),
-                        color=discord.Color.from_rgb(255, 204, 0)
-                    )
-                    end_embed.set_footer(text="MoonQuill is watching over you ✨")
+                    if cmd == "vote":
+                        end_embed = discord.Embed(
+                            title="🗳️ Vote reminder!",
+                            description=(
+                                f"Your **/{cmd}** cooldown is over.\n\n"
+                                f"{ELAINA_YAY} You can support Mazoku again on top.gg!"
+                            ),
+                            color=discord.Color.from_rgb(255, 204, 0)
+                        )
+                    else:
+                        end_embed = discord.Embed(
+                            title="🌞 Cooldown finished!",
+                            description=(
+                                f"Your **/{cmd}** is available again.\n\n"
+                                f"{ELAINA_YAY} Enjoy this new light\n"
+                                "✨ MoonQuill is watching over you"
+                            ),
+                            color=discord.Color.from_rgb(255, 204, 0)
+                        )
+                        end_embed.set_footer(text="MoonQuill is watching over you ✨")
+
                     await safe_send(message.channel, content=f"{user.mention}", embed=end_embed)
 
-                if log_channel:
-                    await safe_send(
-                        log_channel,
-                        embed=discord.Embed(
-                            title="🕒 Cooldown ended",
-                            description=f"For {user.mention} → `/{cmd}` (reminder={'sent' if reminder_status!='off' else 'skipped'})",
-                            color=discord.Color.blue(),
+                    # ✅ Log dans le channel de log
+                    if log_channel:
+                        log_embed = discord.Embed(
+                            title="📩 Reminder sent",
+                            description=f"Reminder for `{cmd}` sent to {user.mention} (ID: `{user.id}`)",
+                            color=discord.Color.green(),
                             timestamp=datetime.datetime.now(datetime.timezone.utc)
                         )
-                    )
+                        await safe_send(log_channel, embed=log_embed)
+
             except Exception:
                 pass
 
         asyncio.create_task(cooldown_task())
+
 
 # ----------------
 # Entry point
