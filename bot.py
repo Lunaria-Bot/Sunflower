@@ -42,9 +42,9 @@ RARITY_MESSAGES = {
 EMOJI_REGEX = re.compile(r"<a?:\w+:(\d+)>")
 
 COOLDOWN_SECONDS = {
-    "summon": 1800, #30 min
-    "open-boxes": 60, #1 min
-    "open-pack": 60 # 1min
+    "summon": 1800, # 30 min
+    "open-boxes": 60, # 1 min
+    "open-pack": 60, # 1min
     "vote": 43200   # 12h
 }
 
