@@ -139,7 +139,7 @@ class AutoRole(commands.Cog):
                     mentions = " ".join(m.mention for m in batch)
                     await channel.send(mentions)
 
-                # ✅ Final summary count
+                # ✅ Final summary countf
                 await channel.send(f"📊 Total users updated: **{len(self.changed_members)}**")
 
 
