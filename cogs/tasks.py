@@ -9,7 +9,7 @@ log = logging.getLogger("cog-tasks")
 STATUSES = [
     discord.Activity(type=discord.ActivityType.watching, name="Sunflower 🌻 "),
     discord.Activity(type=discord.ActivityType.playing, name="Binding of Isaac 🎮 "),
-    discord.Activity(type=discord.ActivityType.listening, name="to the last hit🎵"),
+    discord.Activity(type=discord.ActivityType.listening, name="to the last hit 🎵"),
 ]
 
 class Tasks(commands.Cog):
