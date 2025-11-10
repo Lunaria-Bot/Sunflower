@@ -21,9 +21,9 @@ RARITY_EMOJIS = {
 
 # Émojis animés custom pour l’affichage
 RARITY_CUSTOM_EMOJIS = {
-    "SR": "<a:SuperRare:1342208034482425936>",
-    "SSR": "<a:SuperSuperRare:1342208039918370857>",
-    "UR": "<a:UltraRare:1342208044351623199>",
+    "SR": "<a:SRsun:1437411200450302022>",
+    "SSR": "<a:SSRsun:1437411914316779591>>",
+    "UR": "<a:URsun:1437412024702341130>",
 }
 
 # Messages de rareté
