@@ -26,7 +26,7 @@ class Reminder(commands.Cog):
         # 🔔 Message final personnalisé
         content = (
             f"⏱️Hey ! {member.mention}, your </summon:1301277778385174601> "
-            f"is available <:Kanna_Cool:1298168957420834816>"
+            f"is available <:Sunflower:1309765415051989056>"
         )
         try:
             await channel.send(
