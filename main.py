@@ -1,10 +1,10 @@
 # main.py
 import os
 import logging
-import asyncio
 import glob
 import discord
 from discord.ext import commands
+import asyncpg
 import redis.asyncio as redis
 
 # --- Logging ---
@@ -14,10 +14,11 @@ logging.basicConfig(
 )
 log = logging.getLogger("main")
 
-# --- Token, Redis, Prefix ---
+# --- Token, Redis, Postgres, Prefix ---
 TOKEN = os.getenv("DISCORD_TOKEN")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-COMMAND_PREFIX = os.getenv("COMMAND_PREFIX", "m?")  # ← prefix configurable (default: m?)
+DATABASE_URL = os.getenv("DATABASE_URL")  # ← ajoute ta URL Postgres
+COMMAND_PREFIX = os.getenv("COMMAND_PREFIX", "m?")  # prefix configurable (default: m?)
 
 # --- Intents ---
 intents = discord.Intents.default()
@@ -35,9 +36,21 @@ bot = commands.Bot(
 
 # --- Setup hook ---
 async def setup_hook():
-    # Connexion Redis partagée pour tous les cogs
+    # ✅ Connexion Postgres
     try:
-        bot.redis = redis.from_url(REDIS_URL, decode_responses=True)
+        bot.db_pool = await asyncpg.create_pool(
+            dsn=DATABASE_URL,
+            min_size=1,
+            max_size=5
+        )
+        log.info("✅ Connected to Postgres at %s", DATABASE_URL)
+    except Exception as e:
+        bot.db_pool = None
+        log.error("❌ Postgres connection failed: %s", e)
+
+    # ✅ Connexion Redis
+    try:
+        bot.redis = await redis.from_url(REDIS_URL, decode_responses=True)
         await bot.redis.ping()
         log.info("✅ Connected to Redis at %s", REDIS_URL)
     except Exception as e:
