@@ -1,122 +1,157 @@
 import logging
+import asyncio
 import discord
 from discord.ext import commands, tasks
-from discord import app_commands
+import asyncpg
 from datetime import datetime, timedelta, timezone
-import redis.asyncio as redis
+import json
 
-log = logging.getLogger("cog-dailyreminder")
+log = logging.getLogger("cog-dailyreminder-moonquil")
 
-GUILD_ID = 1293611593845706793  # your server ID
-LOG_CHANNEL_ID = 1421465080238964796  # log channel
-REDIS_URL = "redis://default:WEQfFAaMkvNPFvEzOpAQsGdDTTbaFzOr@redis-436594b0.railway.internal:6379"
-
-DAILY_KEY = "dailyreminder:subscribers"
-DAILY_MESSAGE = "Hello just to remind you that your Mazoku Daily is ready !"
-
+DAILY_COOLDOWN_HOURS = 24  # rappel quotidien
 
 class DailyReminder(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.redis = None
-        self.daily_task.start()
+        self.pool: asyncpg.Pool | None = None
+        self.active_reminders = {}
+        self.cleanup_task.start()
+        self._restored = False
 
     async def cog_load(self):
-        self.redis = redis.from_url(REDIS_URL, decode_responses=True)
+        self.pool = self.bot.db_pool
+        log.info("✅ Pool Postgres attachée pour DailyReminder (Moonquil)")
 
-    async def cog_unload(self):
-        if self.redis:
-            await self.redis.close()
-        self.daily_task.cancel()
+    def cog_unload(self):
+        self.cleanup_task.cancel()
 
-    # --- Toggle subscription ---
-    @app_commands.command(name="toggle-daily", description="Toggle daily Mazoku reminder on/off")
-    @app_commands.guilds(discord.Object(id=GUILD_ID))
-    async def toggle_daily(self, interaction: discord.Interaction):
-        user_id = str(interaction.user.id)
-        subscribed = await self.redis.sismember(DAILY_KEY, user_id)
+    async def publish_event(self, guild_id: int, user_id: int, event_type: str, details: dict | None = None):
+        """Publie un événement vers Redis pour le Master avec bot_name=Moonquil."""
+        if not getattr(self.bot, "redis", None):
+            return
+        event = {
+            "bot_name": "Moonquil",
+            "bot_id": self.bot.user.id,
+            "guild_id": guild_id,
+            "user_id": user_id,
+            "event_type": event_type,
+            "details": details or {}
+        }
+        try:
+            await self.bot.redis.publish("bot_events", json.dumps(event))
+            log.info("📡 DailyReminder Event publié: %s", event)
+        except Exception as e:
+            log.error("❌ Impossible de publier l'événement Redis: %s", e)
 
-        if subscribed:
-            await self.redis.srem(DAILY_KEY, user_id)
-            await interaction.response.send_message("❌ You will no longer receive daily reminders.", ephemeral=True)
-        else:
-            await self.redis.sadd(DAILY_KEY, user_id)
-            await interaction.response.send_message("✅ You will now receive daily reminders.", ephemeral=True)
+    async def send_daily_message(self, member: discord.Member, channel: discord.TextChannel):
+        try:
+            await channel.send(f"☀️ Daily reminder for {member.mention}!")
+            log.info("🔔 Daily reminder sent to %s", member.display_name)
+            await self.publish_event(member.guild.id, member.id, "daily_triggered", {"channel": channel.id})
+        except discord.Forbidden:
+            log.warning("❌ Cannot send daily reminder in %s", channel.name)
 
-    # --- List subscribers (admin only) ---
-    @app_commands.command(name="list-daily", description="List all users subscribed to daily reminders")
-    @app_commands.guilds(discord.Object(id=GUILD_ID))
-    async def list_daily(self, interaction: discord.Interaction):
-        # Restrict to admins
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("⛔ You don’t have permission to use this command.", ephemeral=True)
+    async def start_daily(self, member: discord.Member, channel: discord.TextChannel):
+        key = f"{member.guild.id}:{member.id}"
+        if key in self.active_reminders:
             return
 
-        subscribers = await self.redis.smembers(DAILY_KEY)
-        if not subscribers:
-            await interaction.response.send_message("📭 No one is currently subscribed.", ephemeral=True)
-            return
-
-        guild = interaction.guild
-        mentions = []
-        for uid in subscribers:
-            member = guild.get_member(int(uid))
-            if member:
-                mentions.append(member.mention)
-            else:
-                mentions.append(f"<@{uid}>")  # fallback mention
-
-        # Send as ephemeral to admin
-        await interaction.response.send_message(
-            f"👥 Subscribers ({len(subscribers)}):\n" + ", ".join(mentions),
-            ephemeral=True
-        )
-
-    # --- Daily task ---
-    @tasks.loop(hours=24)
-    async def daily_task(self):
-        await self.bot.wait_until_ready()
-        guild = self.bot.get_guild(GUILD_ID)
-        if not guild:
-            return
-
-        subscribers = await self.redis.smembers(DAILY_KEY)
-        if not subscribers:
-            return
-
-        success = 0
-        failed = 0
-
-        for uid in subscribers:
-            member = guild.get_member(int(uid))
-            if member:
-                try:
-                    await member.send(DAILY_MESSAGE)
-                    success += 1
-                except discord.Forbidden:
-                    failed += 1
-
-        # Log summary in the log channel
-        log_channel = guild.get_channel(LOG_CHANNEL_ID)
-        if log_channel:
-            now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-            await log_channel.send(
-                f"📊 Daily reminder summary at {now}:\n"
-                f"✅ Sent: {success}\n"
-                f"❌ Failed: {failed}\n"
-                f"👥 Total subscribers: {len(subscribers)}"
+        expire_at = datetime.now(timezone.utc) + timedelta(hours=DAILY_COOLDOWN_HOURS)
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO daily_reminders (guild_id, user_id, channel_id, expire_at) "
+                "VALUES ($1, $2, $3, $4) "
+                "ON CONFLICT (guild_id, user_id) DO UPDATE SET channel_id=$3, expire_at=$4",
+                member.guild.id, member.id, channel.id, expire_at
             )
 
-    @daily_task.before_loop
-    async def before_daily_task(self):
-        await self.bot.wait_until_ready()
-        now = datetime.now(timezone.utc)
-        target = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        if now >= target:
-            target += timedelta(days=1)
-        await discord.utils.sleep_until(target)
+        await self.publish_event(member.guild.id, member.id, "daily_started", {
+            "channel": channel.id,
+            "expire_at": expire_at.isoformat()
+        })
 
+        async def reminder_task():
+            try:
+                log.info("▶️ Daily task started for %s (%sh)", member.display_name, DAILY_COOLDOWN_HOURS)
+                await asyncio.sleep(DAILY_COOLDOWN_HOURS * 3600)
+                await self.send_daily_message(member, channel)
+            finally:
+                self.active_reminders.pop(key, None)
+                async with self.pool.acquire() as conn:
+                    await conn.execute(
+                        "DELETE FROM daily_reminders WHERE guild_id=$1 AND user_id=$2",
+                        member.guild.id, member.id
+                    )
+                log.info("🗑️ Daily reminder deleted for %s", member.display_name)
+                await self.publish_event(member.guild.id, member.id, "daily_deleted")
+
+        task = asyncio.create_task(reminder_task())
+        self.active_reminders[key] = task
+
+    async def restore_reminders(self):
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT guild_id, user_id, channel_id, expire_at FROM daily_reminders")
+        now = datetime.now(timezone.utc)
+
+        restored_count = 0
+        for row in rows:
+            guild = self.bot.get_guild(row["guild_id"])
+            if not guild:
+                continue
+            member = guild.get_member(row["user_id"])
+            if not member:
+                continue
+            channel = guild.get_channel(row["channel_id"])
+            if not channel:
+                continue
+
+            remaining = (row["expire_at"] - now).total_seconds()
+            if remaining <= 0:
+                async with self.pool.acquire() as conn:
+                    await conn.execute(
+                        "DELETE FROM daily_reminders WHERE guild_id=$1 AND user_id=$2",
+                        row["guild_id"], row["user_id"]
+                    )
+                continue
+
+            async def reminder_task():
+                try:
+                    await asyncio.sleep(remaining)
+                    await self.send_daily_message(member, channel)
+                finally:
+                    self.active_reminders.pop(f"{guild.id}:{member.id}", None)
+                    async with self.pool.acquire() as conn:
+                        await conn.execute(
+                            "DELETE FROM daily_reminders WHERE guild_id=$1 AND user_id=$2",
+                            guild.id, member.id
+                        )
+                    await self.publish_event(guild.id, member.id, "daily_deleted")
+
+            task = asyncio.create_task(reminder_task())
+            self.active_reminders[f"{guild.id}:{member.id}"] = task
+            restored_count += 1
+
+            await self.publish_event(guild.id, member.id, "daily_restored", {
+                "remaining": remaining,
+                "channel": channel.id
+            })
+
+        log.info("📋 Checklist: %s Daily reminders restored after restart", restored_count)
+        await self.publish_event(0, 0, "daily_checklist", {"restored_count": restored_count})
+
+    @tasks.loop(hours=1)
+    async def cleanup_task(self):
+        async with self.pool.acquire() as conn:
+            await conn.execute("DELETE FROM daily_reminders WHERE expire_at <= $1", datetime.now(timezone.utc))
+        log.info("🧹 Cleanup: expired Daily reminders deleted")
+
+    @cleanup_task.before_loop
+    async def before_cleanup(self):
+        await self.bot.wait_until_ready()
+        if not self._restored:
+            await self.restore_reminders()
+            self._restored = True
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(DailyReminder(bot))
-    log.info("⚙️ DailyReminder cog loaded")
+    log.info("⚙️ DailyReminder cog loaded (Moonquil + Postgres + Redis events + checklist)")
