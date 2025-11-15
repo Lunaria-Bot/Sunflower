@@ -1,4 +1,3 @@
-import os
 import time
 import logging
 import discord
@@ -6,11 +5,6 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 log = logging.getLogger("cog-high-tier")
-
-GUILD_ID = int(os.getenv("GUILD_ID", "0"))
-HIGH_TIER_ROLE_ID = int(os.getenv("HIGH_TIER_ROLE_ID", "0"))
-HIGH_TIER_COOLDOWN = int(os.getenv("HIGH_TIER_COOLDOWN", "300"))
-REQUIRED_ROLE_ID = int(os.getenv("REQUIRED_ROLE_ID", "0"))  # rôle requis
 
 # IDs détectés dans les embeds de Mudae
 RARITY_EMOJIS = {
@@ -22,7 +16,7 @@ RARITY_EMOJIS = {
 # Émojis animés custom pour l’affichage
 RARITY_CUSTOM_EMOJIS = {
     "SR": "<a:SRsun:1437411200450302022>",
-    "SSR": "<a:SSRsun:1437411914316779591>>",
+    "SSR": "<a:SSRsun:1437411914316779591>",
     "UR": "<a:URsun:1437412024702341130>",
 }
 
@@ -46,7 +40,15 @@ class HighTier(commands.Cog):
     def cog_unload(self):
         self.cleanup_triggered.cancel()
 
-    async def check_cooldown(self, user_id: int) -> int:
+    async def get_config(self, guild: discord.Guild):
+        """Récupère la config serveur depuis le cog GuildConfig"""
+        config_cog = self.bot.get_cog("GuildConfig")
+        if config_cog:
+            return await config_cog.get_config(guild.id)
+        return None
+
+    async def check_cooldown(self, user_id: int, cooldown: int) -> int:
+        """Cooldown stocké en Redis par utilisateur"""
         if not getattr(self.bot, "redis", None):
             return 0
         key = f"cooldown:high-tier:{user_id}"
@@ -54,16 +56,24 @@ class HighTier(commands.Cog):
         now = int(time.time())
         if last_ts:
             elapsed = now - int(last_ts)
-            if elapsed < HIGH_TIER_COOLDOWN:
-                return HIGH_TIER_COOLDOWN - elapsed
+            if elapsed < cooldown:
+                return cooldown - elapsed
         await self.bot.redis.set(key, str(now))
         return 0
 
     # --- Slash command /high-tier ---
     @app_commands.command(name="high-tier", description="Get the High Tier role to be notified of rare spawn")
-    @app_commands.guilds(discord.Object(id=GUILD_ID))
     async def high_tier(self, interaction: discord.Interaction):
-        remaining = await self.check_cooldown(interaction.user.id)
+        config = await self.get_config(interaction.guild)
+        if not config:
+            await interaction.response.send_message("❌ High Tier not configured for this server.", ephemeral=True)
+            return
+
+        role_id = config.get("high_tier_role_id")
+        required_role_id = config.get("required_role_id")
+        cooldown = config.get("high_tier_cooldown", 300)
+
+        remaining = await self.check_cooldown(interaction.user.id, cooldown)
         if remaining > 0:
             await interaction.response.send_message(
                 f"⏳ You must wait {remaining}s before using this command again.",
@@ -71,17 +81,15 @@ class HighTier(commands.Cog):
             )
             return
 
-        # ✅ Vérification du rôle requis
-        required_role = interaction.guild.get_role(REQUIRED_ROLE_ID)
+        required_role = interaction.guild.get_role(required_role_id) if required_role_id else None
         if required_role and required_role not in interaction.user.roles:
             await interaction.response.send_message(
-                f"oops, only {required_role.mention} have access to this feature <:lilac_pensivebread:1415672792522952725>.",
+                f"Oops, only {required_role.mention} can use this command.",
                 ephemeral=True
             )
             return
 
-        # ✅ Rôle High Tier
-        role = interaction.guild.get_role(HIGH_TIER_ROLE_ID)
+        role = interaction.guild.get_role(role_id) if role_id else None
         if not role:
             await interaction.response.send_message("❌ High Tier role not found.", ephemeral=True)
             return
@@ -103,9 +111,16 @@ class HighTier(commands.Cog):
 
     # --- Slash command /high-tier-remove ---
     @app_commands.command(name="high-tier-remove", description="Remove the High Tier role and stop notifications")
-    @app_commands.guilds(discord.Object(id=GUILD_ID))
     async def high_tier_remove(self, interaction: discord.Interaction):
-        remaining = await self.check_cooldown(interaction.user.id)
+        config = await self.get_config(interaction.guild)
+        if not config:
+            await interaction.response.send_message("❌ High Tier not configured for this server.", ephemeral=True)
+            return
+
+        role_id = config.get("high_tier_role_id")
+        cooldown = config.get("high_tier_cooldown", 300)
+
+        remaining = await self.check_cooldown(interaction.user.id, cooldown)
         if remaining > 0:
             await interaction.response.send_message(
                 f"⏳ You must wait {remaining}s before using this command again.",
@@ -113,7 +128,7 @@ class HighTier(commands.Cog):
             )
             return
 
-        role = interaction.guild.get_role(HIGH_TIER_ROLE_ID)
+        role = interaction.guild.get_role(role_id) if role_id else None
         if not role:
             await interaction.response.send_message("❌ High Tier role not found.", ephemeral=True)
             return
@@ -170,7 +185,10 @@ class HighTier(commands.Cog):
                     highest_priority = RARITY_PRIORITY[rarity]
 
         if found_rarity:
-            role = after.guild.get_role(HIGH_TIER_ROLE_ID)
+            config = await self.get_config(after.guild)
+            role_id = config.get("high_tier_role_id") if config else None
+            role = after.guild.get_role(role_id) if role_id else None
+
             if role:
                 self.triggered_messages[after.id] = time.time()
                 emoji = RARITY_CUSTOM_EMOJIS.get(found_rarity, "🌸")
@@ -180,4 +198,4 @@ class HighTier(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(HighTier(bot))
-    log.info("⚙️ HighTier cog loaded")
+    log.info("⚙️ HighTier cog loaded (global slash commands + GuildConfig)")
