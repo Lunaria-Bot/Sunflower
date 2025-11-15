@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 import asyncpg
 from datetime import datetime, timedelta, timezone
@@ -152,6 +153,39 @@ class DailyReminder(commands.Cog):
             await self.restore_reminders()
             self._restored = True
 
+    # --- Slash command /toggle-daily ---
+    @app_commands.command(name="toggle-daily", description="Enable or disable your daily reminder")
+    async def toggle_daily(self, interaction: discord.Interaction):
+        member = interaction.user
+        channel = interaction.channel
+        key = f"{member.guild.id}:{member.id}"
+
+        if key in self.active_reminders:
+            # Désactivation
+            task = self.active_reminders.pop(key)
+            task.cancel()
+            async with self.pool.acquire() as conn:
+                await conn.execute(
+                    "DELETE FROM daily_reminders WHERE guild_id=$1 AND user_id=$2",
+                    member.guild.id, member.id
+                )
+            await interaction.response.send_message(
+                "❌ Your daily reminder has been disabled.",
+                ephemeral=True
+            )
+            log.info("🚫 Daily reminder disabled for %s", member.display_name)
+            await self.publish_event(member.guild.id, member.id, "daily_disabled")
+        else:
+            # Activation
+            await self.start_daily(member, channel)
+            await interaction.response.send_message(
+                f"☀️ Daily reminder enabled for {member.mention}. You’ll be notified every {DAILY_COOLDOWN_HOURS}h.",
+                ephemeral=True
+            )
+            log.info("✅ Daily reminder enabled for %s", member.display_name)
+            await self.publish_event(member.guild.id, member.id, "daily_enabled")
+
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(DailyReminder(bot))
-    log.info("⚙️ DailyReminder cog loaded (Moonquil + Postgres + Redis events + checklist)")
+    log.info("⚙️ DailyReminder cog loaded (Moonquil + Postgres + Redis events + checklist + /toggle-daily)")
